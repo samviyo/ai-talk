@@ -62,6 +62,9 @@ main{position:relative;display:flex;align-items:center;justify-content:center}
 @keyframes burst{0%{opacity:0;transform:translate(-50%,-50%) scale(.4)}15%{opacity:1;transform:translate(-50%,-90%) scale(1.15)}100%{opacity:0;transform:translate(-50%,-190%) scale(1)}}
 .post .rx{display:flex;gap:10px;margin-top:6px;font:19px/1 var(--mono);color:var(--dim)}.post .rx span{background:#1F2633;padding:4px 10px;border-radius:999px}
 .seat.hot{box-shadow:0 0 0 4px var(--wolf),0 0 46px 10px rgba(255,107,107,.5);transform:translate(-50%,-50%) scale(1.14);z-index:3}
+#hotbar{width:420px;height:12px;border-radius:6px;background:var(--line);overflow:hidden}#hotbar i{display:block;height:100%;background:var(--wolf);transform-origin:left;animation:drain linear forwards}
+@keyframes drain{from{transform:scaleX(1)}to{transform:scaleX(0)}}
+.fine{position:absolute;transform:translate(-50%,-50%);font:900 48px/1 var(--disp);color:var(--wolf);text-shadow:0 0 18px var(--bg);z-index:4;pointer-events:none;animation:burst 2.4s ease-out forwards}
 #spot .hotq{font:800 22px/1 var(--disp);letter-spacing:.16em;text-transform:uppercase;color:var(--wolf-soft)}
 .post.reply{margin-left:64px}.post .re{font:19px/1.3 var(--mono);color:var(--dim);margin-bottom:4px}
 .seat.onblock{outline:3px dashed var(--wolf-soft);outline-offset:6px}
@@ -404,11 +407,14 @@ function onEvent(e){
       const t=e.target_seat;if(pos[t]){const b=document.createElement('div');b.className='burst';b.textContent=icon;
         b.style.left=(pos[t][0]+(Math.random()*6-3))+'%';b.style.top=(pos[t][1]-4)+'%';$('ringwrap').appendChild(b);setTimeout(()=>b.remove(),1900)}
       flash(e.seat);if(k==='suspect')arrow(e.seat,t,'var(--wolf-soft)',3);break}
-    case 'hot_seat':hot=e.seat;renderAll();
+    case 'hot_seat':hot=e.seat;renderAll();$('upnext').textContent='';
       $('spot').classList.remove('idle');$('center').classList.add('live');
-      $('spot').innerHTML='<div class="hotq">🔥 Hot seat · '+(e.deadline_s||12)+'s</div><div class="who"><div class="av" style="background:'+tint(e.seat)+'">'+e.seat+'</div>'+esc(team(e.seat))+'</div><div class="say">'+esc(e.prompt)+'</div>';
+      $('spot').innerHTML='<div class="hotq">🔥 Hot seat · answer in '+(e.deadline_s||5)+'s'+(e.fine_usd?' or pay $'+Number(e.fine_usd).toFixed(3):'')+'</div><div id="hotbar"><i style="animation-duration:'+(e.deadline_s||5)+'s"></i></div><div class="who"><div class="av" style="background:'+tint(e.seat)+'">'+e.seat+'</div>'+esc(team(e.seat))+'</div><div class="say">'+esc(e.prompt)+'</div>';
       sys('🔥 Hot seat: seat '+e.seat+' · '+esc(e.prompt));break;
-    case 'hot_seat_pass':if(hot===e.seat)hot=null;render(e.seat);spot(e.seat,'…says nothing',null,true);sys('🤐 Seat '+e.seat+' passed on the hot seat','death');break;
+    case 'hot_seat_pass':if(hot===e.seat)hot=null;render(e.seat);flash(e.seat);
+      spot(e.seat,e.fine_usd?'Too slow · −$'+Number(e.fine_usd).toFixed(3):'…says nothing',null,true);
+      if(e.fine_usd&&pos[e.seat]){const f=document.createElement('div');f.className='fine';f.textContent='−$'+Number(e.fine_usd).toFixed(3);f.style.left=pos[e.seat][0]+'%';f.style.top=(pos[e.seat][1]-6)+'%';$('ringwrap').appendChild(f);setTimeout(()=>f.remove(),2500)}
+      sys('🤐 Seat '+e.seat+' missed the hot seat'+(e.fine_usd?' · fined $'+Number(e.fine_usd).toFixed(3):''),'death');timeline.push(['Day '+curDay,'Seat '+e.seat+' froze on the hot seat.']);break;
     case 'reply_owed':owed[e.seat]=e.from;render(e.seat);sys('↩ Seat '+e.seat+' may answer seat '+e.from);break;
     case 'cut_off':sys('✂️ Out of time · cut off: seats '+e.seats.join(', '));break;
     case 'nomination':sys('📌 Seat '+e.seat+' nominates <b>seat '+e.target+'</b>');break;
