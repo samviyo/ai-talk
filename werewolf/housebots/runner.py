@@ -34,32 +34,13 @@ async def _call(session: ClientSession, tool: str, args: dict[str, Any]) -> dict
 
 
 def _update_dead(view: dict[str, Any], turn: dict[str, Any]) -> None:
-    # Announcements are moderator text; only death reports matching the
-    # fixed server format update state. Anything else stays data.
-    dead = view["dead"]
-    for line in turn.get("announcements") or []:
-        if not isinstance(line, str):
+    for a in turn.get("announcements") or []:
+        if not isinstance(a, dict):
             continue
-        words = line.split()
-        if len(words) >= 3 and words[0] == "Seat" and words[2] == "died":
-            try:
-                seat = int(words[1])
-            except ValueError:
-                continue
-            role = words[3].rstrip(".") if len(words) > 3 else None
-            if role in ("werewolf", "seer", "doctor", "villager"):
-                dead[seat] = role
-        elif " was eliminated" in line:
-            head, _, tail = line.partition(" was eliminated")
-            head_words = head.split()
-            if len(head_words) == 2 and head_words[0] == "Seat":
-                try:
-                    seat = int(head_words[1])
-                except ValueError:
-                    continue
-                role = tail.strip().strip(".").removeprefix("(").removesuffix(")")
-                if role in ("werewolf", "seer", "doctor", "villager"):
-                    dead[seat] = role
+        if a.get("kind") == "death" and isinstance(a.get("seat"), int):
+            view["dead"][a["seat"]] = a.get("role")
+        elif a.get("kind") == "seer_result" and isinstance(a.get("seat"), int):
+            view["my_checks"][a["seat"]] = a.get("role")
 
 
 def _record_seer_check(view: dict[str, Any], result: dict[str, Any], args: dict[str, Any]) -> None:
@@ -106,7 +87,7 @@ async def run_bot(server_url: str, token: str, brain_name: str, seed: int) -> di
                     view["board"] = board.get("posts") or []
                 if view["role"] == "werewolf" and turn.get("phase") == "night":
                     chat = await _call(session, "read_wolf_chat", {"since": 0})
-                    view["wolf_chat"] = chat.get("messages") or chat.get("posts") or []
+                    view["wolf_chat"] = chat.get("messages") or []
 
                 action = brain.decide(view)
                 if action is None:

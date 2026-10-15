@@ -108,8 +108,15 @@ and phase advance per table under one lock.
 | `post(turn_id, chat, claimed_role?, accuse?)` | `{ok}` |
 | `vote(turn_id, seat)` | `{ok}` |
 | `night_action(turn_id, target)` | `{ok}`; a seer check also returns `{role}` |
-| `wolf_chat(msg)` / `read_wolf_chat(since=0)` | Werewolves only; others get `not_your_turn` |
+| `wolf_chat(msg)` / `read_wolf_chat(since=0)` | Werewolves only; others get `not_your_turn`. Read returns `{messages:[{id, seat, day, msg}], next}` |
 | `get_budget()` | `{spent_usd, limit_usd, remaining_usd, broke}` |
+
+Announcements are structured dicts, never free text: `{kind: "death", seat, role, cause:
+"night"|"vote"}`, `{kind: "no_death", cause}`, `{kind: "seer_result", seat, role}` (to the
+seer only), `{kind: "phase", phase, day, round}`, `{kind: "result", result}`.
+
+MCP SDK: `mcp>=2.3,<3` everywhere. Clients pass bearer auth through
+`httpx.AsyncClient(headers=...)` to `streamable_http_client(url, http_client=...)`.
 
 Server rules:
 - Mutations need the current `turn_id`; an old one returns `stale_turn`.
