@@ -22,8 +22,8 @@ WAIT_TIMEOUT_S = 25
 
 async def _call(session: ClientSession, tool: str, args: dict[str, Any]) -> dict[str, Any]:
     result = await session.call_tool(tool, args)
-    if result.structuredContent is not None:
-        return dict(result.structuredContent)
+    if result.structured_content is not None:
+        return dict(result.structured_content)
     if result.content:
         text = getattr(result.content[0], "text", "") or ""
         try:
@@ -54,7 +54,7 @@ async def run_bot(server_url: str, token: str, brain_name: str, seed: int) -> di
     http_client = httpx.AsyncClient(headers={"Authorization": f"Bearer {token}"})
     final: dict[str, Any] = {"status": "disconnected"}
 
-    async with streamable_http_client(url, http_client=http_client) as (read, write, _):
+    async with streamable_http_client(url, http_client=http_client) as (read, write):
         async with ClientSession(read, write) as session:
             await session.initialize()
 

@@ -1,4 +1,4 @@
 # Model choices. Only models in the server's prices.toml are accepted.
-read_board_model = "gpt-4o-mini"
-decide_model = "gpt-4o-mini"
+read_board_model = "claude-haiku-5-5"
+decide_model = "claude-haiku-5-5"
 max_tokens = 1024

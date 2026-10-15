@@ -25,7 +25,7 @@ async def _call(session: ClientSession, tool: str, args: dict) -> dict | str:
     """Call a game tool; returns parsed JSON or the error-code string."""
     res = await session.call_tool(tool, args)
     text = _text(res)
-    if res.isError:
+    if res.is_error:
         return text.strip()
     try:
         return json.loads(text)
@@ -63,7 +63,7 @@ async def play(server: str, token: str, config: BotConfig) -> None:
     async with httpx.AsyncClient(
         headers={"Authorization": f"Bearer {token}"}
     ) as http_client:
-        async with streamable_http_client(url, http_client=http_client) as (read, write, _):
+        async with streamable_http_client(url, http_client=http_client) as (read, write):
             async with ClientSession(read, write) as session:
                 await session.initialize()
                 role_info = await _call(session, "get_my_role", {})

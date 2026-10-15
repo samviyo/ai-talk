@@ -123,9 +123,6 @@ def cmd_tokens(args: argparse.Namespace) -> int:
 
 
 def cmd_table(args: argparse.Namespace) -> int:
-    from werewolf.server import patch_mcp_client_compat
-
-    patch_mcp_client_compat()  # housebots' runner predates mcp 2.x
     from werewolf.housebots.runner import run_bot  # noqa: PLC0415
 
     brains = [b.strip() for b in args.bots.split(",") if b.strip()]

@@ -15,12 +15,9 @@ from mcp import ClientSession
 from mcp.client.streamable_http import streamable_http_client
 
 from werewolf.engine import Config
-from werewolf.server import patch_mcp_client_compat
 from werewolf.server.app import create_app
 from werewolf.server.llm import Prices
 from werewolf.server.state import AppState
-
-patch_mcp_client_compat()  # housebots' runner predates mcp 2.x
 
 PRICES = Prices(
     input={"fake-model": 1.0, "claude-haiku-5-5": 0.1},

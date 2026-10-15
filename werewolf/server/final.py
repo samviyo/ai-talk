@@ -176,9 +176,6 @@ async def run_final(toml_path: Path, check: bool, port: int, budget_usd: float) 
             proc.terminate()
         async with table.cond:
             table.seats[s].process_alive = True  # house bot isn't broke
-        from werewolf.server import patch_mcp_client_compat
-
-        patch_mcp_client_compat()  # housebots' runner predates mcp 2.x
         procs[s] = await asyncio.create_subprocess_exec(
             sys.executable, "-m", "werewolf.housebots",
             "--server", url, "--token", tokens[s], "--brain", "baseline",

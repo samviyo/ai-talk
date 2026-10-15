@@ -11,11 +11,6 @@ output = 10.0
 input = 4.0
 output = 20.0
 
-# starter/bot default; gateway cost unknown, priced like a cheap small model
-[models.gpt-4o-mini]
-input = 0.15
-output = 0.6
-
 [models."accounts/fireworks/models/gpt-oss-120b"]
 input = 0.15
 output = 0.6

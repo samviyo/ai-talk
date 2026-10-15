@@ -102,7 +102,7 @@ and phase advance per table under one lock.
 
 | Tool | Returns |
 |---|---|
-| `wait_for_turn(timeout_s=25)` | `{turn_id, phase, day, round, you_owe, legal_targets, announcements, deadline_s}`, or `{status:"waiting"}` on timeout, or `{status:"over", result}`. Wakes immediately when a window opens for this seat. The only moderator channel |
+| `wait_for_turn(timeout_s=25)` | Server caps the wait at 3.5s (httpx's default 5s read timeout). Each (seat, window) is served once; a re-poll blocks until the next window. Returns `{turn_id, phase, day, round, you_owe, legal_targets, announcements, deadline_s}`, or `{status:"waiting"}` on timeout, or `{status:"over", result}`. Wakes immediately when a window opens for this seat. The only moderator channel |
 | `get_my_role()` | `{seat, role, partners}`. `partners` is empty unless werewolf |
 | `read_board(since=0)` | `{posts:[{id, seat, day, round, chat, claimed_role, accuse}], next}`. Revealed posts only |
 | `post(turn_id, chat, claimed_role?, accuse?)` | `{ok}` |
@@ -116,7 +116,8 @@ Announcements are structured dicts, never free text: `{kind: "death", seat, role
 seer only), `{kind: "phase", phase, day, round}`, `{kind: "result", result}`.
 
 MCP SDK: `mcp>=2.3,<3` everywhere. Clients pass bearer auth through
-`httpx.AsyncClient(headers=...)` to `streamable_http_client(url, http_client=...)`.
+`httpx.AsyncClient(headers=...)` to `streamable_http_client(url, http_client=...)`, which
+yields `(read, write)`; results use snake_case (`structured_content`, `is_error`).
 
 Server rules:
 - Mutations need the current `turn_id`; an old one returns `stale_turn`.
