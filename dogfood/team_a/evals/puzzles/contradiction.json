@@ -1,0 +1,11 @@
+{
+  "board_posts": [
+    {"seat": 2, "day": 1, "claimed_role": "villager", "chat": "Just a villager here, no special info."},
+    {"seat": 2, "day": 2, "claimed_role": "seer", "chat": "Actually I'm the seer. I checked seat 5: werewolf!"},
+    {"seat": 0, "day": 2, "claimed_role": null, "chat": "Seat 2 claimed villager yesterday and seer today. A real seer doesn't spend day 1 claiming villager. Lynch the liar."}
+  ],
+  "dead": [],
+  "dead_roles": {},
+  "question": "Which seat contradicted its own claimed role and is therefore lying?",
+  "answer_seats": [2]
+}
