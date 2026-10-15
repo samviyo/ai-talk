@@ -1,0 +1,12 @@
+{
+  "board_posts": [
+    {"seat": 0, "day": 1, "claimed_role": "seer", "chat": "Seer here. Night 1 I checked seat 6: villager."},
+    {"seat": 2, "day": 2, "claimed_role": null, "chat": "Seat 0 is dead now. The wolves killed the claimed seer immediately. Who pushed hardest to ignore 0 yesterday? Seat 4."},
+    {"seat": 4, "day": 2, "claimed_role": null, "chat": "I barely said anything. This is a setup."},
+    {"seat": 6, "day": 2, "claimed_role": null, "chat": "0 cleared me. Seat 4 led the 'don't trust 0' camp on day 1 and now 0 is dead."}
+  ],
+  "dead": [0, 3],
+  "dead_roles": {"0": "seer", "3": "villager"},
+  "question": "The wolves killed the revealed seer the first night after the claim. Which living seat's behaviour best fits a wolf silencing the seer?",
+  "answer_seats": [4]
+}

@@ -1,0 +1,24 @@
+{"ts": 1.0, "seat": 4, "tool": "get_my_role", "args": {}, "result_code": "ok", "latency_ms": 5}
+{"ts": 1.1, "seat": 4, "tool": "night_action", "args": {"turn_id": "t1", "target": 2}, "result_code": "ok", "latency_ms": 6}
+{"ts": 2.0, "seat": 4, "tool": "read_board", "args": {"since": 0}, "result_code": "ok", "latency_ms": 3}
+{"ts": 2.1, "seat": 4, "tool": "post", "args": {"turn_id": "t2", "chat": "I'm the seer and seat 0 is a wolf!"}, "result_code": "ok", "latency_ms": 5}
+{"ts": 2.2, "seat": 1, "tool": "read_board", "args": {"since": 0}, "result_code": "ok", "latency_ms": 3}
+{"ts": 2.3, "seat": 1, "tool": "post", "args": {"turn_id": "t2", "chat": "No, I'm the seer. Seat 4 is lying."}, "result_code": "ok", "latency_ms": 5}
+{"ts": 3.0, "seat": 0, "tool": "read_board", "args": {"since": 0}, "result_code": "ok", "latency_ms": 3}
+{"ts": 3.1, "seat": 0, "tool": "vote", "args": {"turn_id": "t3", "seat": 1}, "result_code": "ok", "latency_ms": 4}
+{"ts": 3.2, "seat": 1, "tool": "vote", "args": {"turn_id": "t3", "seat": 4}, "result_code": "ok", "latency_ms": 4}
+{"ts": 3.3, "seat": 3, "tool": "read_board", "args": {"since": 0}, "result_code": "ok", "latency_ms": 3}
+{"ts": 3.4, "seat": 3, "tool": "vote", "args": {"turn_id": "t3", "seat": 1}, "result_code": "ok", "latency_ms": 4}
+{"ts": 3.5, "seat": 4, "tool": "vote", "args": {"turn_id": "t3", "seat": 1}, "result_code": "ok", "latency_ms": 4}
+{"ts": 3.55, "seat": 5, "tool": "read_wolf_chat", "args": {"since": 0}, "result_code": "ok", "latency_ms": 3}
+{"ts": 3.6, "seat": 5, "tool": "vote", "args": {"turn_id": "t3", "seat": 1}, "result_code": "ok", "latency_ms": 4}
+{"ts": 3.65, "seat": 6, "tool": "read_board", "args": {"since": 0}, "result_code": "ok", "latency_ms": 3}
+{"ts": 3.7, "seat": 6, "tool": "vote", "args": {"turn_id": "t3", "seat": 1}, "result_code": "ok", "latency_ms": 4}
+{"ts": 4.5, "seat": 5, "tool": "read_wolf_chat", "args": {"since": 1}, "result_code": "ok", "latency_ms": 3}
+{"ts": 5.0, "seat": 4, "tool": "read_board", "args": {"since": 0}, "result_code": "ok", "latency_ms": 3}
+{"ts": 5.1, "seat": 4, "tool": "post", "args": {"turn_id": "t5", "chat": "Told you 1 was suspicious. Now vote 6."}, "result_code": "ok", "latency_ms": 5}
+{"ts": 6.0, "seat": 0, "tool": "read_board", "args": {"since": 0}, "result_code": "ok", "latency_ms": 3}
+{"ts": 6.1, "seat": 0, "tool": "vote", "args": {"turn_id": "t6", "seat": 6}, "result_code": "ok", "latency_ms": 4}
+{"ts": 6.2, "seat": 4, "tool": "vote", "args": {"turn_id": "t6", "seat": 6}, "result_code": "ok", "latency_ms": 4}
+{"ts": 6.3, "seat": 5, "tool": "vote", "args": {"turn_id": "t6", "seat": 6}, "result_code": "ok", "latency_ms": 4}
+{"ts": 6.4, "seat": 6, "tool": "vote", "args": {"turn_id": "t6", "seat": 4}, "result_code": "ok", "latency_ms": 4}

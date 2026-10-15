@@ -1,0 +1,11 @@
+{"ts": 1.0, "seat": 0, "tool": "get_my_role", "args": {}, "result_code": "ok", "latency_ms": 5}
+{"ts": 2.0, "seat": 0, "tool": "post", "args": {"turn_id": "t2", "chat": "No comment."}, "result_code": "ok", "latency_ms": 4}
+{"ts": 3.0, "seat": 0, "tool": "vote", "args": {"turn_id": "t3", "seat": 1}, "result_code": "ok", "latency_ms": 4}
+{"ts": 3.2, "seat": 1, "tool": "vote", "args": {"turn_id": "t3", "seat": 3}, "result_code": "ok", "latency_ms": 4}
+{"ts": 3.3, "seat": 2, "tool": "vote", "args": {"turn_id": "t3", "seat": 3}, "result_code": "ok", "latency_ms": 4}
+{"ts": 3.4, "seat": 4, "tool": "vote", "args": {"turn_id": "t3", "seat": 1}, "result_code": "ok", "latency_ms": 4}
+{"ts": 3.6, "seat": 6, "tool": "vote", "args": {"turn_id": "t3", "seat": 1}, "result_code": "ok", "latency_ms": 4}
+{"ts": 4.0, "seat": 0, "tool": "vote", "args": {"turn_id": "t3", "seat": 1}, "result_code": "already_acted", "latency_ms": 2}
+{"ts": 6.0, "seat": 0, "tool": "vote", "args": {"turn_id": "t6", "seat": 1}, "result_code": "dead_seat", "latency_ms": 3}
+{"ts": 6.1, "seat": 4, "tool": "vote", "args": {"turn_id": "t6", "seat": 6}, "result_code": "ok", "latency_ms": 4}
+{"ts": 6.3, "seat": 6, "tool": "vote", "args": {"turn_id": "t6", "seat": 4}, "result_code": "ok", "latency_ms": 4}

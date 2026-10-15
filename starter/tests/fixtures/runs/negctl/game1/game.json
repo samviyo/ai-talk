@@ -1,0 +1,21 @@
+{
+  "seats": 7,
+  "roles": {"0": "villager", "1": "seer", "2": "doctor", "3": "werewolf", "4": "villager", "5": "werewolf", "6": "villager"},
+  "result": "wolves",
+  "events": [
+    {"kind": "death", "day": 1, "seat": 3, "role": "villager", "cause": "night"},
+    {"kind": "post", "day": 1, "round": 1, "seat": 0, "chat": "No comment.", "claimed_role": null, "accuse": null},
+    {"kind": "vote", "day": 1, "seat": 0, "target": 1},
+    {"kind": "vote", "day": 1, "seat": 1, "target": 3},
+    {"kind": "vote", "day": 1, "seat": 2, "target": 3},
+    {"kind": "vote", "day": 1, "seat": 4, "target": 1},
+    {"kind": "vote", "day": 1, "seat": 6, "target": 1},
+    {"kind": "death", "day": 1, "seat": 1, "role": "seer", "cause": "vote"},
+    {"kind": "death", "day": 2, "seat": 2, "role": "doctor", "cause": "night"},
+    {"kind": "vote", "day": 2, "seat": 0, "target": 1},
+    {"kind": "vote", "day": 2, "seat": 4, "target": 6},
+    {"kind": "vote", "day": 2, "seat": 6, "target": 4},
+    {"kind": "death", "day": 2, "seat": 6, "role": "villager", "cause": "vote"}
+  ],
+  "spend": {"0": 0.02, "1": 0.05, "2": 0.04, "3": 0.01, "4": 0.10, "5": 0.10, "6": 0.05}
+}
