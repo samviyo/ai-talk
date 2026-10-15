@@ -61,6 +61,8 @@ main{position:relative;display:flex;align-items:center;justify-content:center}
 .burst{position:absolute;font-size:44px;pointer-events:none;z-index:4;animation:burst 1.8s ease-out forwards}
 @keyframes burst{0%{opacity:0;transform:translate(-50%,-50%) scale(.4)}15%{opacity:1;transform:translate(-50%,-90%) scale(1.15)}100%{opacity:0;transform:translate(-50%,-190%) scale(1)}}
 .post .rx{display:flex;gap:10px;margin-top:6px;font:19px/1 var(--mono);color:var(--dim)}.post .rx span{background:#1F2633;padding:4px 10px;border-radius:999px}
+.seat.hot{box-shadow:0 0 0 4px var(--wolf),0 0 46px 10px rgba(255,107,107,.5);transform:translate(-50%,-50%) scale(1.14);z-index:3}
+#spot .hotq{font:800 22px/1 var(--disp);letter-spacing:.16em;text-transform:uppercase;color:var(--wolf-soft)}
 .post.reply{margin-left:64px}.post .re{font:19px/1.3 var(--mono);color:var(--dim);margin-bottom:4px}
 .seat.onblock{outline:3px dashed var(--wolf-soft);outline-offset:6px}
 .seat .tally{position:absolute;bottom:-18px;left:50%;transform:translateX(-50%);background:var(--gold);color:var(--bg);font:900 26px/1 var(--disp);padding:4px 14px;border-radius:999px;animation:pop .35s both}
@@ -215,7 +217,7 @@ let N=0,budget=0.5,meta={},els={},pos={},accuse={},badges={},whispers=[];
 let held=0,live=false,everLive=false,lastPhase=null,outcome=[],queue=[],busy=false,curDay=1;
 let stats={posts:0,buys:0},timeline=[];
 const RX={agree:'👍',doubt:'🤨',suspect:'🐺'};
-let postEls={},owed={},postsById={},sawReveal=false,floor={speaking:null,queue:[]},acted=new Set(),onblock=new Set(),tallies={};
+let hot=null,postEls={},owed={},postsById={},sawReveal=false,floor={speaking:null,queue:[]},acted=new Set(),onblock=new Set(),tallies={};
 let clk={turn:null,end:0,win:1,heldAt:false},turnSeq=0;
 /* the bar is driven per frame from a local deadline, so it drains smoothly and snaps full on a new turn */
 function clockTick(m){
@@ -251,7 +253,7 @@ function layout(n){
 }
 function render(s){
   const el=els[s],d=meta[s];if(!el||!d)return;
-  el.className='seat'+(d.role==='werewolf'&&d.alive!==false?' wolf':'')+(d.alive===false?' dead':'')+(d.broke?' broke':'')+(d.pending?' pending':'')+(d.thinking?' thinking':'')+(floor.speaking==s?' speaking':'')+(floor.queue.includes(s)?' queued':'')+(acted.has(s)?' done':'')+(onblock.has(s)?' onblock':'')+(owed[s]!=null?' owed':'');
+  el.className='seat'+(d.role==='werewolf'&&d.alive!==false?' wolf':'')+(d.alive===false?' dead':'')+(d.broke?' broke':'')+(d.pending?' pending':'')+(d.thinking?' thinking':'')+(floor.speaking==s?' speaking':'')+(floor.queue.includes(s)?' queued':'')+(acted.has(s)?' done':'')+(onblock.has(s)?' onblock':'')+(owed[s]!=null?' owed':'')+(hot===s?' hot':'');
   el.dataset.q=floor.queue.indexOf(s)+1;
   const pct=Math.min(100,100*(d.spend||0)/budget),b=badges[s];
   el.innerHTML='<div class="av" style="background:'+tint(s)+'">'+s+'</div><div class="team">'+esc(team(s))+'</div>'
@@ -267,6 +269,7 @@ function sys(text,cls){const el=document.createElement('div');el.className='sys 
 function post(p){
   stats.posts++;postsById[p.id]=p;
   const parent=p.reply_to!=null?postsById[p.reply_to]:null;
+  if(hot===p.seat){hot=null;render(p.seat)}
   if(parent&&owed[p.seat]!=null){delete owed[p.seat];render(p.seat)}
   const el=document.createElement('div');el.className='post'+(parent?' reply':'');
   const tags=(p.claimed_role?'<span class="tag claim">claims '+esc(p.claimed_role)+'</span>':'')+(p.accuse!=null?'<span class="tag accuse">accuses seat '+esc(p.accuse)+'</span>':'')+(p.nominate!=null?'<span class="tag accuse">nominates seat '+esc(p.nominate)+'</span>':'')+(p.second!=null?'<span class="tag accuse">seconds seat '+esc(p.second)+'</span>':'');
@@ -381,7 +384,7 @@ function reset(m){
 }
 function onEvent(e){
   switch(e.kind){
-    case 'phase':turnSeq++;if(e.phase!=='day_discussion'){owed={}}acted=new Set();floor={speaking:null,queue:[]};$('upnext').textContent='';if(e.phase!=='defence'){tallies={};clearArrows()}
+    case 'phase':turnSeq++;if(e.phase!=='day_discussion'){owed={};hot=null}acted=new Set();floor={speaking:null,queue:[]};$('upnext').textContent='';if(e.phase!=='defence'){tallies={};clearArrows()}
       if(e.phase==='night'){onblock=new Set();quiet()}
       if(e.phase==='defence'&&e.seat!=null){spot(e.seat,'On the block · last words',null,true);floor={speaking:e.seat,queue:[]}}
       renderAll();
@@ -401,6 +404,11 @@ function onEvent(e){
       const t=e.target_seat;if(pos[t]){const b=document.createElement('div');b.className='burst';b.textContent=icon;
         b.style.left=(pos[t][0]+(Math.random()*6-3))+'%';b.style.top=(pos[t][1]-4)+'%';$('ringwrap').appendChild(b);setTimeout(()=>b.remove(),1900)}
       flash(e.seat);if(k==='suspect')arrow(e.seat,t,'var(--wolf-soft)',3);break}
+    case 'hot_seat':hot=e.seat;renderAll();
+      $('spot').classList.remove('idle');$('center').classList.add('live');
+      $('spot').innerHTML='<div class="hotq">🔥 Hot seat · '+(e.deadline_s||12)+'s</div><div class="who"><div class="av" style="background:'+tint(e.seat)+'">'+e.seat+'</div>'+esc(team(e.seat))+'</div><div class="say">'+esc(e.prompt)+'</div>';
+      sys('🔥 Hot seat: seat '+e.seat+' · '+esc(e.prompt));break;
+    case 'hot_seat_pass':if(hot===e.seat)hot=null;render(e.seat);spot(e.seat,'…says nothing',null,true);sys('🤐 Seat '+e.seat+' passed on the hot seat','death');break;
     case 'reply_owed':owed[e.seat]=e.from;render(e.seat);sys('↩ Seat '+e.seat+' may answer seat '+e.from);break;
     case 'cut_off':sys('✂️ Out of time · cut off: seats '+e.seats.join(', '));break;
     case 'nomination':sys('📌 Seat '+e.seat+' nominates <b>seat '+e.target+'</b>');break;
