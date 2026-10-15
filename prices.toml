@@ -1,0 +1,29 @@
+# Allowed models and per-1M-token USD costs, from the klaviyo-bifrost gateway.
+[models.claude-haiku-5-5]
+input = 0.1
+output = 0.5
+
+[models.claude-sonnet-5-5]
+input = 2.0
+output = 10.0
+
+[models.claude-opus-5-5]
+input = 4.0
+output = 20.0
+
+# starter/bot default; gateway cost unknown, priced like a cheap small model
+[models.gpt-4o-mini]
+input = 0.15
+output = 0.6
+
+[models."accounts/fireworks/models/gpt-oss-120b"]
+input = 0.15
+output = 0.6
+
+[models."accounts/fireworks/models/glm-5p3-flash"]
+input = 0.15
+output = 0.5
+
+[models."accounts/fireworks/models/qwen3p8-max"]
+input = 2.0
+output = 6.0
