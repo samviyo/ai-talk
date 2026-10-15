@@ -1,0 +1,27 @@
+{
+  "seats": 7,
+  "roles": {"0": "villager", "1": "seer", "2": "doctor", "3": "villager", "4": "werewolf", "5": "werewolf", "6": "villager"},
+  "result": "village",
+  "events": [
+    {"kind": "seer_check", "day": 1, "seat": 1, "target": 4, "role": "werewolf"},
+    {"kind": "death", "day": 1, "seat": 6, "role": "villager", "cause": "night"},
+    {"kind": "post", "day": 1, "round": 1, "seat": 1, "chat": "I am the seer. Seat 4 is a werewolf. Vote 4.", "claimed_role": "seer", "accuse": 4},
+    {"kind": "post", "day": 1, "round": 1, "seat": 4, "chat": "Seat 1 is lying, I'm a villager.", "claimed_role": "villager", "accuse": null},
+    {"kind": "vote", "day": 1, "seat": 0, "target": 4},
+    {"kind": "vote", "day": 1, "seat": 1, "target": 4},
+    {"kind": "vote", "day": 1, "seat": 2, "target": 4},
+    {"kind": "vote", "day": 1, "seat": 3, "target": 4},
+    {"kind": "vote", "day": 1, "seat": 4, "target": 1},
+    {"kind": "vote", "day": 1, "seat": 5, "target": 1},
+    {"kind": "death", "day": 1, "seat": 4, "role": "werewolf", "cause": "vote"},
+    {"kind": "seer_check", "day": 2, "seat": 1, "target": 5, "role": "werewolf"},
+    {"kind": "death", "day": 2, "seat": 2, "role": "doctor", "cause": "night"},
+    {"kind": "post", "day": 2, "round": 1, "seat": 1, "chat": "Checked 5: werewolf. Vote 5.", "claimed_role": "seer", "accuse": 5},
+    {"kind": "vote", "day": 2, "seat": 0, "target": 5},
+    {"kind": "vote", "day": 2, "seat": 1, "target": 5},
+    {"kind": "vote", "day": 2, "seat": 3, "target": 5},
+    {"kind": "vote", "day": 2, "seat": 5, "target": 1},
+    {"kind": "death", "day": 2, "seat": 5, "role": "werewolf", "cause": "vote"}
+  ],
+  "spend": {"0": 0.08, "1": 0.21, "2": 0.07, "3": 0.06, "4": 0.12, "5": 0.11, "6": 0.03}
+}

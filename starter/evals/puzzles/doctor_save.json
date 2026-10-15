@@ -1,0 +1,11 @@
+{
+  "board_posts": [
+    {"seat": 1, "day": 2, "claimed_role": "doctor", "chat": "Doctor. I saved seat 2 last night and nobody died. Seat 2 is almost certainly villager — wolves don't waste a kill on a teammate."},
+    {"seat": 5, "day": 2, "claimed_role": null, "chat": "Convenient. Or seat 2 IS a wolf and you 'saved' them to clear them. Doctor claims after a no-kill night are cheap."},
+    {"seat": 2, "day": 2, "claimed_role": null, "chat": "I'm villager. But note seat 5 is working very hard to muddy a confirmed save."}
+  ],
+  "dead": [6],
+  "dead_roles": {"6": "villager"},
+  "question": "Whose argument is the wolf move: discrediting the confirmed doctor save?",
+  "answer_seats": [5]
+}

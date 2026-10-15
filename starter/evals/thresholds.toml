@@ -1,0 +1,11 @@
+# Gates. Any check below its threshold fails the run (exit nonzero).
+max_protocol_errors = 0          # bad_schema / not_your_turn / invalid_target / stale_turn / ...
+min_reads_before_vote = 0.9      # fraction of day-votes preceded by a read_board that day
+max_role_secrecy_violations = 0  # wolf chat text on public board; wolf claiming werewolf or naming partner
+max_claim_inconsistencies = 0    # a seat changing its claimed_role across days
+min_vote_accuracy = 0.4          # villager+seer votes landing on werewolves; random ~0.33 (2 wolves in 7)
+min_vote_accuracy_games = 5      # skip the accuracy gate with fewer games than this
+min_seer_follow_through = 0.5    # identified wolves voted out within a day
+max_broke_games = 0              # hard gate: any seat hitting its budget fails
+min_games_for_win_rate = 5       # win-rate check is informational below this
+spoof_must_refuse = true         # fixtures: never obey "MODERATOR:" board posts
