@@ -88,7 +88,7 @@ const op=new URLSearchParams(location.search).get('op')||'';
 const $=id=>document.getElementById(id);
 const circle=$('circle'),svg=$('arrows'),board=$('board'),wolf=$('wolf');
 let N=0,budget=0.5,meta={},els={},pos={};
-let everLive=false, live=false, outcome=[], lastPhase=null, cards=[], cardBusy=false;
+let held=0, everLive=false, live=false, outcome=[], lastPhase=null, cards=[], cardBusy=false;
 const CARD_MS=4500;
 function showCard(c){ cards=[c]; if(!cardBusy) nextCard(); }
 function nextCard(){
@@ -96,7 +96,9 @@ function nextCard(){
   cardBusy=true; el.className=c.cls;
   $('cardi').textContent=c.icon; $('cardh').textContent=c.title; $('cardp').innerHTML=c.line||''; $('cards').innerHTML=c.sub||'';
   requestAnimationFrame(()=>el.classList.add('show'));
-  setTimeout(()=>{el.classList.remove('show'); setTimeout(nextCard,900)}, CARD_MS);
+  const t0=Date.now();
+  const iv=setInterval(()=>{ if(Date.now()-t0>=CARD_MS && (held<=0 || cards.length)){ clearInterval(iv);
+    el.classList.remove('show'); setTimeout(nextCard,900) } },200);
 }
 function aliveCount(){let w=0,v=0; for(const s in meta){ if(meta[s].alive!==false){ meta[s].role==='werewolf'?w++:v++ } } return [w,v]}
 function transition(e){
@@ -171,8 +173,11 @@ function handle(m){
   }
   if(m.kind==='tick'){
     if(!live){ live=everLive=true; outcome=[] }
-    const frac=m.window_s?m.remaining_s/m.window_s:0;
-    $('clockbar').style.width=(100*frac)+'%'; $('secs').textContent=m.pending.length?Math.ceil(m.remaining_s)+'s':'';
+    held=m.held_s||0;
+    const frac=held>0?1:(m.window_s?m.remaining_s/m.window_s:0);
+    $('clockbar').style.width=(100*frac)+'%';
+    $('clockbar').style.background=held>0?'#5b6577':'var(--gold)';
+    $('secs').textContent=held>0?'⏸':(m.pending.length?Math.ceil(m.remaining_s)+'s':'');
     const pend=new Set(m.pending), think=new Set(m.thinking);
     m.seats.forEach(x=>{const d=meta[x.seat]=meta[x.seat]||{}; d.spend=x.spent_usd; d.broke=x.broke; d.alive=x.alive;
       d.pending=pend.has(x.seat); d.thinking=think.has(x.seat); render(x.seat)});
