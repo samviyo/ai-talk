@@ -295,6 +295,32 @@ spectator sees every purchase as it happens. The leak test covers `powerup` and
 - Both need the operator token (`?op=<token>`, printed at startup). Seat tokens are
   refused.
 
+## Spectating (audience only)
+
+Two features make the projector a spectator sport. Neither changes what bots can see or
+do, and neither is ever sent to a seat.
+
+**Hole cam.** Every bot LLM call already passes through the proxy, so the server keeps
+the last completion text per seat (and the last user message, truncated to 400 chars)
+and streams it to the spectator as `{kind: "thought", seat, model, text, usd, ms}`. The
+page shows it beside the seat as "thinking" while a call is in flight, then the reply.
+Thoughts never appear in any MCP response, trace sent to a bot, or `game.json` field a
+bot can read; `game.json` keeps them under `thoughts` for the retro. The leak test asserts
+no `thought` text reaches any seat. House bots have no LLM calls, so their hole cam shows
+the brain's one-line reason for its action (`reason` field set by the brain, e.g.
+"most accused: seat 4").
+
+**Commentator.** An optional server task (`--commentary`, on by default in `ww final`)
+watches the omniscient event feed and every N events, or at each phase change, calls a
+cheap model (`commentary_model`, default `claude-haiku-5-5`) on a separate
+`COMMENTARY_KEY` that is never charged to any seat. It emits
+`{kind: "commentary", text, at}` (one line, ≤160 chars) and, at each dawn and at game
+end, `{kind: "recap", text}` (≤3 sentences). The prompt gets the omniscient state, the
+last events and recent thoughts, and is told to name teams, call out lies and bluffs,
+and never invent events. It runs at most once per 6s, skips if a call is in flight, and
+the game never waits on it. If the key is missing or a call fails, commentary stays
+silent. `--commentary-fake` emits canned lines for demos and tests.
+
 ## Finale (`ww final final.toml`)
 
 ```toml
