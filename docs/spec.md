@@ -32,10 +32,10 @@ Python 3.12, `uv`, one workspace `pyproject.toml` at the root. Tests with `pytes
 Exactly 1 seer, 1 doctor, `wolves` werewolves, the rest villagers. `Config` validation
 rejects `seats < 2 * wolves + 3`. Roles are assigned by a shuffle from `seed`.
 
-| Format | Seats | Wolves | Discussion rounds | Max days |
+| Format | Seats | Wolves | Discussion | Max days |
 |---|---|---|---|---|
-| practice | 7 | 2 | 2 | 5 |
-| final | 10–12 | 3 | 1 | 6 |
+| practice | 7 | 2 | 60s live chat, 3 posts each | 5 |
+| final | 10–12 | 3 | 90s live chat, 3 posts each | 6 |
 
 ## Engine contract (`werewolf/engine`)
 
@@ -66,9 +66,11 @@ class Game:
     result: Literal["village", "wolves", "draw"] | None
 ```
 
-**Windows.** The game is a sequence of windows: each night, each discussion round, each
-vote. A window opens for every seat in `pending()` at once and closes when all of them
-have acted or abstained. `turn_id` identifies the open window.
+**Windows.** The game is a sequence of windows: each night, each day's discussion, each
+vote. Night and vote windows open for every seat in `pending()` at once and close when all
+of them have acted or abstained, or at the deadline. The discussion window is timed: it
+always runs its full length (`discussion_s`) and never closes early. `turn_id`
+identifies the open window.
 
 **Obligations.** `pending()` maps a seat to exactly one obligation: `night_kill`,
 `seer_check`, `doctor_save`, `post` or `vote`. Villagers owe nothing at night. One
@@ -78,8 +80,14 @@ accepted action or one abstention clears it; a second action returns `already_ac
 submitted ballots; a tie is broken by the seeded RNG; zero ballots means no kill. The
 doctor may save itself, but not the same seat two nights running. A saved target lives.
 
-**Discussion.** Posts made during a round are held privately and revealed together when
-the window closes, so posting early never costs information.
+**Discussion (live chat).** One discussion window per day, `discussion_s` long (practice
+60s, final 90s). Every living seat may post up to `max_posts` times (default 3) during it;
+each post appears on the board immediately, so bots can read and reply to each other.
+Posts carry an optional `reply_to` (a post id). A seat that posts nothing simply stays
+quiet; no obligation is owed, so silence is not an abstention. A minimum gap of 5s
+between one seat's posts stops a bot from flooding the board. `extra_post` raises that
+seat's `max_posts` by one for the day. Night and vote are unchanged.
+`discussion_rounds` is removed from `Config`; `discussion_s` and `max_posts` replace it.
 
 **Vote.** Ballots are private until resolution. Plurality is eliminated; a tie or zero
 ballots eliminates nobody. The role is revealed on death.
@@ -104,8 +112,8 @@ and phase advance per table under one lock.
 |---|---|
 | `wait_for_turn(timeout_s=25)` | Server caps the wait at 3.5s (httpx's default 5s read timeout). Each (seat, window) is served once; a re-poll blocks until the next window. Returns `{turn_id, phase, day, round, you_owe, legal_targets, announcements, deadline_s}`, or `{status:"waiting"}` on timeout, or `{status:"over", result}`. Wakes immediately when a window opens for this seat. The only moderator channel |
 | `get_my_role()` | `{seat, role, partners}`. `partners` is empty unless werewolf |
-| `read_board(since=0)` | `{posts:[{id, seat, day, round, chat, claimed_role, accuse}], next}`. Revealed posts only |
-| `post(turn_id, chat, claimed_role?, accuse?)` | `{ok}` |
+| `read_board(since=0)` | `{posts:[{id, seat, day, chat, claimed_role, accuse, reply_to}], next, discussion_ends_in_s}`. Posts are live during discussion |
+| `post(turn_id, chat, claimed_role?, accuse?, reply_to?)` | `{ok, posts_left}`; `too_fast` inside the 5s gap, `no_posts_left` past `max_posts` |
 | `vote(turn_id, seat)` | `{ok}` |
 | `night_action(turn_id, target)` | `{ok}`. A seer's result arrives as the `seer_result` announcement when night resolves (see Power-ups) |
 | `wolf_chat(msg)` / `read_wolf_chat(since=0)` | Werewolves only; others get `not_your_turn`. Read returns `{messages:[{id, seat, day, msg}], next}` |
@@ -161,7 +169,7 @@ house bots included, buys from the same ledger (see Budget and fallback).
 
 | Item | Default | Who | Buy during | Limit | Effect |
 |---|---|---|---|---|---|
-| `extra_post` | $0.05 | living seat | a `post` window, before posting | 1 per round | that seat's `post` may carry `chat2`; both messages reveal together at window close |
+| `extra_post` | $0.05 | living seat | during discussion | 1 per day | one more post today (`max_posts` + 1) |
 | `whisper` | $0.08 | living seat | any day window | 1 per day | private message (≤280 chars) to one other living seat, delivered when the window closes |
 | `double_vote` | $0.15 | living seat | its `vote` window, before voting | 1 per game | its ballot counts twice |
 | `shield` | $0.20 | living non-wolf | any day window except on day `max_days` | 1 per day | protects the buyer from the kill on the coming night only |
@@ -185,12 +193,12 @@ house bots included, buys from the same ledger (see Budget and fallback).
   This holds for every check, framed or not, so timing reveals nothing.
 - Votes: weighted totals; a tie or zero weight eliminates nobody. The tally lists each
   ballot with its `weight`.
-- Whispers buffer until the window closes and reach the target as
-  `{kind: "whisper", from, msg}` in its next `wait_for_turn`. Board text and whispers are
+- Whispers reach the target as `{kind: "whisper", from, msg}` in its next `wait_for_turn` or
+  `read_board` (a `whispers` list), whichever comes first. Board text and whispers are
   untrusted player content.
 
 **What other seats can see.** Purchase records are private to the buyer. Others see only
-these effects: a second message in a post, a ballot weight of 2 in the tally, a whisper
+these effects: one post more than the usual limit, a ballot weight of 2 in the tally, a whisper
 addressed to them, and whatever they infer from a `no_death` or a seer claim. The
 spectator sees every purchase as it happens. The leak test covers `powerup` and
 `whisper` events, error codes, and announcement timing as well as roles.
@@ -202,7 +210,7 @@ spectator sees every purchase as it happens. The leak test covers `powerup` and
   `whisper{seat, target, msg}` (audience: buyer and target), both in the omniscient view.
 - MCP: `shop()` → `{items: [{item, price_usd, available, reason?}], remaining_usd}`;
   `buy(turn_id, item, target?, msg?)` → `{ok, remaining_usd}`. Both count against the
-  10-calls-per-window budget. `post` gains optional `chat2`.
+  10-calls-per-window budget.
 - `game.json` events gain `{kind:"powerup", seat, item, target, usd}` and
   `{kind:"whisper", seat, target, msg}`. `spend` stays the total per seat, LLM plus items.
 
