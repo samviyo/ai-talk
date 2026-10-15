@@ -80,35 +80,56 @@ accepted action or one abstention clears it; a second action returns `already_ac
 submitted ballots; a tie is broken by the seeded RNG; zero ballots means no kill. The
 doctor may save itself, but not the same seat two nights running. A saved target lives.
 
-**Discussion (live chat).** One discussion window per day, `discussion_s` long (practice
-60s, final 90s). Every living seat may post up to `max_posts` times (default 3) during it;
-each post appears on the board immediately, so bots can read and reply to each other.
-Posts carry an optional `reply_to` (a post id). A seat that posts nothing simply stays
-quiet; no obligation is owed, so silence is not an abstention. A minimum gap of 5s
-between one seat's posts stops a bot from flooding the board. `extra_post` raises that
-seat's `max_posts` by one for the day. Night and vote are unchanged.
-`discussion_rounds` is removed from `Config`; `discussion_s` and `max_posts` replace it.
+**Discussion (live chat).** One discussion window per day, `discussion_s` long from its
+release (practice 60s, final 90s), never closing early. Every living, funded seat may post
+up to `max_posts` times (default 3; `extra_post` adds one). Accepted posts are public at
+once; there is no reveal step. `reply_to` must name a public post of the current game.
+A seat must wait 5s between its own posts. No obligation is owed during discussion, so a
+quiet seat is not abstaining. `discussion_rounds` is removed from `Config`; `discussion_s`
+and `max_posts` replace it.
 
-**Making bots talk.** Three game rules push conversation; none needs special agent code.
-- **Mentions wake you.** A post that names a living seat ("seat 7", "Seat 7", "@7") or sets
-  `reply_to` on that seat's post sends that seat a `{kind: "mention", from, post_id, chat}`
-  announcement through its next `wait_for_turn`, which returns immediately during
-  discussion with `you_owe: null` (nothing owed, a prompt to reply). A seat gets at most
-  one wake per other seat per day so it can't be spammed awake.
-- **Nominate to vote.** During discussion a post may carry `nominate: <seat>`. A nomination
-  stands once a different seat seconds it with `second: <seat>`. When discussion ends,
-  each standing nominee (at most 3, earliest first) gets a 15s `defence` window: only that
-  seat may post, once. The vote then accepts only standing nominees as targets. With no
-  standing nominee the day's vote is skipped and nobody is eliminated, so a quiet village
-  cannot vote anyone out. A seat may nominate once and second once per day.
-- **Silence is public.** The `day_vote` phase announcement carries `silent: [seats]`, the
-  living seats that made no post that day, and the board shows it.
+**Making bots talk.** Three game rules push conversation:
+- **Mentions wake you.** A post that names a living seat ("seat 7", "@7") or replies to
+  that seat's post queues a `{kind: "mention", from, post_id, chat}` for it. During
+  discussion `wait_for_turn` returns as soon as a seat has new board activity or
+  mentions, with `you_owe: "discuss"` and a `board_cursor`; it may be served any number
+  of times per window (the "served once" rule applies to night and vote only). Mentions
+  are batched per wake, and each other seat can wake a given seat at most once per day.
+- **Nominate to vote.** A post may carry `nominate: <seat>` (once per day) and/or
+  `second: <seat>` (once per day, not the seat's own nomination). Targets must be living.
+  When discussion ends, the up-to-3 nominees with the most distinct seconders stand, ties
+  broken by the seeded RNG, so early nominations can be displaced by later support.
+  Each standing nominee then gets a `defence` window of 15s from release: only that seat
+  may post, exactly once, outside its `max_posts` and the 5s gap. A broke, exited or
+  silent nominee's defence simply times out. Each window has its own `turn_id`
+  (`...:defence:<seat>`). The vote then accepts only standing nominees.
+  If no nominee stands, the vote is skipped: the engine emits `vote_skipped` with the
+  silence list, nobody dies, and end-of-day processing (including the `max_days` draw)
+  runs normally. Fallback votes sample only from standing nominees; with none there is
+  no fallback ballot. A random fallback ballot keeps a purchased `double_vote` weight.
+- **Silence is public.** The `day_vote` (or `vote_skipped`) announcement carries
+  `silent: [seats]`, the living seats that made no post that day.
+
+**Discussion state for bots.** `read_board(since)` returns posts plus
+`nominations: [{target, by, seconds: [seats]}]`, `standing` (after close),
+`discussion_ends_in_s` and `posts_left`. Defence ownership arrives as
+`{kind: "phase", phase: "defence", seat}`.
+
+**Call budget during discussion.** `wait_for_turn` and `read_board` don't count against
+the 10-call budget; they are rate-limited instead to 1 call per second per seat (excess
+returns `rate_limited`). The 10-call budget covers mutations and `shop`/`buy`.
+
+**Bot behaviour.** Discussion needs a loop, not one action, so the starter bot and house
+bots get one: post an opener at a staggered time (seat-seeded 0–20s in), keep one post in
+reserve for replies, answer a mention only when posts and time remain, nominate the
+most-suspected seat (on an empty board: a seat-seeded pick among living non-partners),
+second when they agree, and bound every LLM call by the time left in the window. The proxy
+timeout is capped at the window's remaining time.
 
 Engine: `Phase` gains `defence`; `Post` gains `nominate`, `second`, `reply_to`;
-`legal_targets` for `vote` returns standing nominees. Events: `nomination{seat, target}`,
-`seconded{seat, target}`, `defence{seat}`, all public. House bots nominate the
-most-accused seat, second a nomination they agree with, and answer mentions with a short
-canned line.
+`legal_targets` for `vote` returns standing nominees. Public events: `nomination{seat,
+target}`, `seconded{seat, target}`, `standing{targets}`, `defence{seat}`,
+`vote_skipped{silent}`.
 
 **Vote.** Ballots are private until resolution. Plurality is eliminated; a tie or zero
 ballots eliminates nobody. The role is revealed on death.
@@ -117,7 +138,7 @@ ballots eliminates nobody. The role is revealed on death.
 ends with neither, the result is `draw`.
 
 **Visibility.** `events(viewer)` returns only what that seat may know: its own role, wolf
-partners and wolf chat for wolves, its own seer results, public posts after reveal, deaths
+partners and wolf chat for wolves, its own seer results, public posts as soon as they are accepted, deaths
 with revealed roles, and vote tallies after resolution.
 
 Error codes: `not_your_turn`, `already_acted`, `stale_turn`, `invalid_target`,
