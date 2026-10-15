@@ -127,9 +127,14 @@ class Dispatcher:
                 table.cond.notify_all()
             over = table.game.result is not None
             if name == "get_my_role":
+                # In the idle gap, this call opens the next game for this seat.
+                if table.idle:
+                    table.start_game_locked()
                 table.ready_seats.add(seat)
                 if len(table.ready_seats) == table.config.seats:
                     table.ready_event.set()
+                    table.unfreeze_locked()
+                    table.cond.notify_all()
                 return self._role(table, seat)
             if over and name in ("post", "vote", "night_action", "wolf_chat"):
                 return _err("not_your_turn", "game over")
@@ -146,9 +151,7 @@ class Dispatcher:
                 return _err("bad_schema", f"unknown tool {name}")
             result = handler(table, seat, args)
             table.note_window_locked()
-            if table.game.result is not None and not table._run_written:
-                table._run_written = True
-                table.write_run()
+            table._write_run_if_done_locked()
             table._notify_sse_locked()
             table.cond.notify_all()
             return result
@@ -166,6 +169,13 @@ class Dispatcher:
                 g = table.game
                 table._notify_sse_locked()
                 if g.result is not None:
+                    if table.idle:
+                        # Each seat hears "over" once, then the gap reports idle.
+                        if table._served_turn.get(seat) != "over":
+                            table._served_turn[seat] = "over"
+                            return {"status": "over", "result": g.result}
+                        # Between games: the next one opens on get_my_role readiness.
+                        return {"status": "idle", "result": g.result}
                     return {"status": "over", "result": g.result}
                 owe = g.pending().get(seat)
                 # Serve each window once per seat; re-polls wait for the next.

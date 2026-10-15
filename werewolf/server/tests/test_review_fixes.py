@@ -160,6 +160,7 @@ async def test_llm_charge_stays_with_its_game(tmp_path: Path):
                 table.write_run()
                 table._run_written = True
                 table.start_game_locked()
+                table.unfreeze_locked()
                 table.cond.notify_all()
             assert table.game_counter == old_game + 1
             gate.set()
@@ -193,6 +194,8 @@ async def test_turn_id_is_game_scoped(tmp_path: Path):
             table.write_run()
             table._run_written = True
             table.start_game_locked()
+            # in a test there is no readiness wait; open the window directly
+            table.unfreeze_locked()
             table.cond.notify_all()
         r = await mcp_call(srv.url, srv.token(0), "night_action", {
             "turn_id": stale, "target": 1,
@@ -386,32 +389,30 @@ async def test_min_window_s_paces_instant_bots(tmp_path: Path):
     from werewolf.housebots.runner import run_bot
 
     srv = await start_server(
-        tmp_path, seed=60, window_s=30.0, min_window_s=2.0,
+        tmp_path, seed=60, window_s=2.0, min_window_s=2.0,
         transition_on_start=False,
     )
     try:
         table = srv.state.tables[0]
-        releases: list[tuple[str, float]] = []
+        opens: list[tuple[str, float]] = []
+        real_note = table.note_window_locked
 
-        async def watch() -> None:
-            last = None
-            while table.game.result is None:
-                async with table.cond:
-                    if table.game.pending() and not table.holding():
-                        tid = table.game.turn_id
-                        if tid != last:
-                            last = tid
-                            releases.append((tid, _time.monotonic()))
-                await asyncio.sleep(0.05)
+        def spy_note() -> None:
+            prev = table._clocked_turn
+            real_note()
+            if table._clocked_turn != prev:
+                opens.append((table._clocked_turn, table.window_opened))
 
-        watcher = asyncio.create_task(watch())
+        table.note_window_locked = spy_note
         bots = asyncio.gather(
             *(run_bot(srv.url, srv.token(i), "baseline", 200 + i) for i in range(7))
         )
-        await asyncio.wait_for(bots, timeout=180)
-        watcher.cancel()
-        gaps = [b[1] - a[1] for a, b in zip(releases, releases[1:])]
-        assert len(gaps) >= 2, f"too few windows released: {releases}"
+        # the dwell applies between windows regardless of bot speed
+        while len(opens) < 4 and table.game.result is None:
+            await asyncio.sleep(0.2)
+        bots.cancel()
+        gaps = [b[1] - a[1] for a, b in zip(opens, opens[1:])]
+        assert len(gaps) >= 2, f"too few windows opened: {opens}"
         assert all(g >= 1.9 for g in gaps), gaps
     finally:
         await srv.stop()
@@ -424,40 +425,118 @@ async def test_transition_delays_night_after_vote(tmp_path: Path):
     from werewolf.housebots.runner import run_bot
 
     srv = await start_server(
-        tmp_path, seed=61, window_s=30.0, transition_s=2.0,
+        tmp_path, seed=61, window_s=2.0, transition_s=2.0,
         transition_on_start=False,
     )
     try:
         table = srv.state.tables[0]
-        events: list[tuple[str, float]] = []
+        # timestamp each window when it is actually released (hold expires)
+        releases: list[tuple[str, str, float]] = []
+        real_note = table.note_window_locked
 
-        async def watch() -> None:
-            last_tid = None
-            while table.game.result is None:
-                async with table.cond:
-                    if table.game.pending() and not table.holding():
-                        tid = table.game.turn_id
-                        if tid != last_tid:
-                            last_tid = tid
-                            events.append((table.game.phase, tid, _time.monotonic()))
-                await asyncio.sleep(0.05)
+        def spy_note() -> None:
+            prev = table._clocked_turn
+            real_note()
+            if table._clocked_turn != prev:
+                releases.append(
+                    (table.game.phase, table._clocked_turn, table.release_at())
+                )
 
-        watcher = asyncio.create_task(watch())
+        table.note_window_locked = spy_note
         bots = asyncio.gather(
             *(run_bot(srv.url, srv.token(i), "baseline", 300 + i) for i in range(7))
         )
-        await asyncio.wait_for(bots, timeout=180)
-        watcher.cancel()
+
+        def _saw() -> bool:
+            return any(
+                p == "day_vote" and q == "night"
+                for (p, _, _), (q, _, _) in zip(releases, releases[1:])
+            )
+
+        while not _saw() and table.game.result is None:
+            await asyncio.sleep(0.2)
+        bots.cancel()
         nights_after_votes = [
             (t_prev, t)
-            for (prev_ph, _, t_prev), (ph, _, t) in zip(events, events[1:])
+            for (prev_ph, _, t_prev), (ph, _, t) in zip(releases, releases[1:])
             if prev_ph == "day_vote" and ph == "night"
         ]
-        assert nights_after_votes, f"never saw day_vote -> night: {events}"
+        assert nights_after_votes, f"never saw day_vote -> night: {releases}"
         for t_prev, t in nights_after_votes:
             assert t - t_prev >= 1.9, t - t_prev
     finally:
         await srv.stop()
+
+
+async def test_every_game_writes_run_dir(tmp_path: Path):
+    """N fast games must produce N game dirs, even when the last act ends it."""
+    from werewolf.housebots.runner import run_bot
+
+    srv = await start_server(
+        tmp_path, seed=70, window_s=4.0, auto_restart=True,
+    )
+    try:
+        table = srv.state.tables[0]
+
+        async def play_one(game_no: int) -> None:
+            async def one(i: int):
+                return await run_bot(srv.url, srv.token(i), "baseline", game_no * 100 + i)
+
+            # bots exit on "over"; the idle gate opens game N+1 via get_my_role
+            await asyncio.wait_for(asyncio.gather(*(one(i) for i in range(7))), timeout=120)
+
+        games = 3
+        for g in range(1, games + 1):
+            await play_one(g)
+        await asyncio.sleep(2.0)  # let the ticker settle between games
+        for g in range(1, games + 1):
+            assert (tmp_path / "runs" / "table1" / f"game{g}" / "game.json").exists(), (
+                f"game{g} missing"
+            )
+    finally:
+        await srv.stop()
+
+
+async def test_idle_between_games_and_readiness_restart(tmp_path: Path):
+    """Between games wait_for_turn returns idle; readiness opens the next game."""
+    srv = await start_server(
+        tmp_path, seed=71, window_s=60.0, auto_restart=True,
+    )
+    try:
+        table = srv.state.tables[0]
+        async with table.cond:
+            # end game1 so the idle gate covers the gap before game2
+            table.game.result = "village"
+            table.write_run()
+            table._run_written = True
+            table.idle = True
+            table.cond.notify_all()
+        r = await mcp_call(srv.url, srv.token(0), "wait_for_turn", {"timeout_s": 0.2})
+        assert r.get("status") == "over", r  # each seat hears over once
+        r = await mcp_call(srv.url, srv.token(0), "wait_for_turn", {"timeout_s": 0.2})
+        assert r.get("status") == "idle", r
+        # one get_my_role opens game2 frozen for readiness
+        r = await mcp_call(srv.url, srv.token(0), "get_my_role", {})
+        assert r["seat"] == 0
+        assert table.game_counter == 2
+        assert table.frozen and not table.idle
+        # the rest of the seats check in; the last one unfreezes the window
+        for s in range(1, 7):
+            await mcp_call(srv.url, srv.token(s), "get_my_role", {})
+        assert not table.frozen
+        assert table.ready_event.is_set()
+    finally:
+        await srv.stop()
+
+
+async def test_base_url_strips_trailing_v1():
+    """llm.py accepts BIFROST_BASE_URL with or without /v1."""
+    p = LLMProxy(PRICES, "http://gw.example.com", fake=True)
+    assert p.base_url == "http://gw.example.com"
+    p = LLMProxy(PRICES, "http://gw.example.com/v1", fake=True)
+    assert p.base_url == "http://gw.example.com"
+    p = LLMProxy(PRICES, "http://gw.example.com/v1/", fake=True)
+    assert p.base_url == "http://gw.example.com"
 
 
 async def test_no_fallback_during_large_transition(tmp_path: Path):

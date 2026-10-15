@@ -67,7 +67,11 @@ class LLMProxy:
         transport: httpx.AsyncBaseTransport | None = None,
     ) -> None:
         self.prices = prices
-        self.base_url = (base_url or "").rstrip("/")
+        # Accept the base with or without a trailing /v1.
+        base = (base_url or "").rstrip("/")
+        if base.endswith("/v1"):
+            base = base[: -len("/v1")]
+        self.base_url = base
         self.fake = fake
         self._transport = transport
 

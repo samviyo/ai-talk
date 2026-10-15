@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
+import time
 from typing import Any
 
 from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
@@ -114,6 +115,7 @@ def create_app(state: AppState) -> Starlette:
             legal = table.game.legal_targets(seat)
             key = state.key_for(table, seat)
             started_game = table.game_counter
+        t0 = time.monotonic()
         try:
             status, body, charges = await state.proxy.chat_completions(
                 payload, key or "", legal
@@ -133,7 +135,10 @@ def create_app(state: AppState) -> Starlette:
                             seat, "llm_cross_game",
                             {"game": started_game, "usd": round(usd, 6)}, "ok", 0.0,
                         )
-                table._trace(seat, "llm", {"model": payload.get("model")}, str(status), 0.0)
+                table._trace(
+                    seat, "llm", {"model": payload.get("model")}, str(status),
+                    (time.monotonic() - t0) * 1000,
+                )
         return JSONResponse(body, status_code=status)
 
     async def _ticker(table):

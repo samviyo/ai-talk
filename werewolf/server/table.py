@@ -94,6 +94,7 @@ class Table:
         self.need_role_check = False  # finale only: game waits for get_my_role
         # freeze holds the clock and turn serving until readiness/replacement completes
         self.frozen = False
+        self.idle = False  # between games: finished, next game not yet started
         self.traces: list[dict[str, Any]] = []
         self.sse_seq = 0
         self.sse_subs: list[asyncio.Queue[dict[str, Any]]] = []
@@ -120,9 +121,11 @@ class Table:
         self.game = Game(replace(self.config, seed=seed))
         self.traces = []
         self.window_opened = time.monotonic()
-        self.need_role_check = need_role_check
-        self.frozen = need_role_check
-        self.ready_seats = set() if need_role_check else set(range(self.config.seats))
+        self.idle = False
+        # Every new game waits for each seat to call get_my_role once.
+        self.need_role_check = True
+        self.frozen = True
+        self.ready_seats = set()
         self.ready_event.clear()
         for st in self.seats:
             st.spent_usd = 0.0
@@ -210,9 +213,26 @@ class Table:
             for seat in list(g.pending()):
                 self._fallback_locked(seat)
             self.note_window_locked()
-            if g.result is not None and not self._run_written:
-                self._run_written = True
+        self._write_run_if_done_locked()
+        if (
+            self.auto_restart
+            and not self.frozen
+            and self.game.result is not None
+            and not self.idle
+        ):
+            # Mark the gap; the next game opens on get_my_role readiness.
+            self.idle = True
+
+    def _write_run_if_done_locked(self) -> None:
+        """Persist a finished game before any restart; caller holds the lock."""
+        if self.game.result is not None and not self._run_written:
+            try:
                 self.write_run()
+            except Exception:  # never lose the fact the game ended
+                import traceback
+
+                traceback.print_exc()
+            self._run_written = True
 
     def note_window_locked(self) -> None:
         """Start the window deadline the moment the engine's turn_id changes."""
@@ -224,6 +244,7 @@ class Table:
             self._prev_phase = self.game.phase
 
     def _fallback_locked(self, seat: int) -> None:
+        t0 = time.monotonic()
         g = self.game
         obligation = g.pending().get(seat)
         if obligation is None:
@@ -231,7 +252,10 @@ class Table:
         broke = self.is_broke(seat)
         if not broke:
             g.abstain(seat)
-            self._trace(seat, "_fallback_abstain", {}, "ok", 0.0)
+            self._trace(
+                seat, "_fallback_abstain", {}, "ok",
+                (time.monotonic() - t0) * 1000,
+            )
             return
         rng = self._rng
         try:
@@ -265,7 +289,10 @@ class Table:
                 g.abstain(seat)
         except IllegalAction:
             g.abstain(seat)
-        self._trace(seat, "_fallback_broke", {"obligation": obligation}, "ok", 0.0)
+        self._trace(
+            seat, "_fallback_broke", {"obligation": obligation}, "ok",
+            (time.monotonic() - t0) * 1000,
+        )
 
     # --- events / announcements ----------------------------------------------
 
@@ -452,7 +479,7 @@ class Table:
 
 
 async def ticker(table: Table) -> None:
-    """1s clock: applies deadlines and restarts finished games."""
+    """1s clock: applies deadlines and marks finished games idle."""
     while True:
         # Wake at the release instant too, so held windows start on time.
         await asyncio.sleep(min(1.0, max(0.05, table.release_at() - time.monotonic())))
@@ -464,13 +491,16 @@ async def ticker(table: Table) -> None:
                 table.cond.notify_all()
             if (
                 table.auto_restart
+                and not table.idle
                 and table.game.result is not None
                 and table._run_written
             ):
                 await asyncio.sleep(0.2)  # let waiters observe the result
                 async with table.cond:
-                    if table.game.result is not None and table._run_written:
-                        table.start_game_locked()
+                    # The next game opens only when its readiness rule is met.
+                    if not table.idle and table.game.result is not None:
+                        table.idle = True
+                        table._push_sse_locked(table.spectator_tick())
                         table.cond.notify_all()
         except Exception:  # keep the clock alive
             import traceback

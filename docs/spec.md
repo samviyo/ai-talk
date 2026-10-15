@@ -102,7 +102,7 @@ and phase advance per table under one lock.
 
 | Tool | Returns |
 |---|---|
-| `wait_for_turn(timeout_s=25)` | Server caps the wait at 3.5s (httpx's default 5s read timeout). Each (seat, window) is served once; a re-poll blocks until the next window. Returns `{turn_id, phase, day, round, you_owe, legal_targets, announcements, deadline_s}`, or `{status:"waiting"}` on timeout, or `{status:"over", result}`. Wakes immediately when a window opens for this seat. The only moderator channel |
+| `wait_for_turn(timeout_s=25)` | Server caps the wait at 3.5s (httpx's default 5s read timeout). Each (seat, window) is served once; a re-poll blocks until the next window. Returns `{turn_id, phase, day, round, you_owe, legal_targets, announcements, deadline_s}`, or `{status:"waiting"}` on timeout, or `{status:"over", result}`. Between games (auto-restart on) it returns `{status:"idle", result}` after each seat has heard `over` once; the next game opens frozen until every seat calls `get_my_role`. Wakes immediately when a window opens for this seat. The only moderator channel |
 | `get_my_role()` | `{seat, role, partners}`. `partners` is empty unless werewolf |
 | `read_board(since=0)` | `{posts:[{id, seat, day, round, chat, claimed_role, accuse}], next}`. Revealed posts only |
 | `post(turn_id, chat, claimed_role?, accuse?)` | `{ok}` |
