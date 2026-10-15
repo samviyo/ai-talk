@@ -1,4 +1,4 @@
-"""Window/obligation lifecycle: advance only when all obligations clear; error codes."""
+"""Window/obligation lifecycle: advance only when obligations clear; error codes."""
 
 from __future__ import annotations
 
@@ -13,7 +13,13 @@ from werewolf.engine import (
     SeerCheck,
     Vote,
 )
-from werewolf.engine.tests.helpers import config, seats_with
+from werewolf.engine.tests.helpers import (
+    config,
+    end_discussion,
+    end_night,
+    seats_with,
+    to_vote,
+)
 
 
 @pytest.fixture
@@ -87,7 +93,6 @@ def test_dead_seat_cannot_act() -> None:
     wolves = seats_with(game, "werewolf")
     seer, doctor = seats_with(game, "seer")[0], seats_with(game, "doctor")[0]
     villager = seats_with(game, "villager")[0]
-    # wolves converge on one villager; doctor saves nobody -> death at night close
     game.act(seer, SeerCheck(wolves[0]))
     game.abstain(doctor)
     for wolf in wolves:
@@ -110,40 +115,57 @@ def test_invalid_target_self_kill_and_wrong_type(night_game: Game) -> None:
         night_game.act(wolf, Post(chat="wrong kind of action"))
 
 
-def test_vote_invalid_target_self() -> None:
+def test_vote_restricted_to_standing_nominees() -> None:
     game = Game(config(seed=7))
-    # clear night with abstentions to reach day 1 vote quickly (rounds=0)
-    game = Game(config(seed=7, rounds=0))
-    for seat in sorted(game.pending()):
-        game.abstain(seat)
+    end_night(game)
+    alive = game.alive()
+    nominator, target = alive[0], alive[1]
+    game.act(nominator, Post(chat=f"seat {target} is sus", nominate=target), now=0.0)
+    to_vote(game)
     assert game.phase == "day_vote"
-    seat = game.alive()[0]
+    voter = alive[2]
     with pytest.raises(IllegalAction, check=lambda e: e.code == "invalid_target"):
-        game.act(seat, Vote(seat))
+        game.act(voter, Vote(alive[3]))
+    game.act(voter, Vote(target))
+
+
+def test_no_nominee_skips_the_vote() -> None:
+    game = Game(config(seed=7))
+    end_night(game)
+    game.act(game.alive()[0], Post(chat="quiet day"), now=0.0)
+    end_discussion(game)
+    assert game.phase == "night"
+    assert game.day == 2
+    skipped = next(e for e in game.events(None) if e.kind == "vote_skipped")
+    assert skipped.data["silent"] == [s for s in game.alive() if s != game.alive()[0]]
+    assert not any(e.kind == "vote_tally" for e in game.events(None))
+
+
+def test_vote_skip_on_max_days_is_a_draw() -> None:
+    game = Game(config(seed=7, max_days=1))
+    end_night(game)
+    end_discussion(game)
+    assert game.result == "draw"
 
 
 def test_too_long_post_and_wolf_chat(night_game: Game) -> None:
     wolf = seats_with(night_game, "werewolf")[0]
     with pytest.raises(IllegalAction, check=lambda e: e.code == "too_long"):
         night_game.wolf_chat(wolf, "x" * 501)
-    game = Game(config(seed=7, rounds=1))
-    for seat in sorted(game.pending()):
-        game.abstain(seat)
-    assert game.phase == "day_discussion"
-    seat = game.alive()[0]
+    end_night(night_game)
+    seat = night_game.alive()[0]
     with pytest.raises(IllegalAction, check=lambda e: e.code == "too_long"):
-        game.act(seat, Post(chat="x" * 281))
+        night_game.act(seat, Post(chat="x" * 281), now=0.0)
 
 
 def test_bad_schema_claimed_role_and_accuse() -> None:
-    game = Game(config(seed=7, rounds=1))
-    for seat in sorted(game.pending()):
-        game.abstain(seat)
+    game = Game(config(seed=7))
+    end_night(game)
     seat = game.alive()[0]
     with pytest.raises(IllegalAction, check=lambda e: e.code == "bad_schema"):
-        game.act(seat, Post(chat="hi", claimed_role="mayor"))
+        game.act(seat, Post(chat="hi", claimed_role="mayor"), now=0.0)
     with pytest.raises(IllegalAction, check=lambda e: e.code == "invalid_target"):
-        game.act(seat, Post(chat="hi", accuse=99))
+        game.act(seat, Post(chat="hi", accuse=99), now=0.0)
 
 
 def test_legal_targets_scoped_to_obligation(night_game: Game) -> None:
@@ -158,8 +180,50 @@ def test_turn_id_changes_each_window() -> None:
     game = Game(config(seed=7))
     seen = {game.turn_id}
     while game.result is None:
+        if game.phase == "day_discussion":
+            game.close_discussion()
+            continue
         for seat in sorted(game.pending()):
             game.abstain(seat)
-        if game.turn_id not in seen:
-            seen.add(game.turn_id)
+        seen.add(game.turn_id)
     assert len(seen) > 1
+
+
+def test_post_rate_limit_and_max_posts() -> None:
+    game = Game(config(seed=7, max_posts=2))
+    end_night(game)
+    seat = game.alive()[0]
+    game.act(seat, Post(chat="one"), now=0.0)
+    with pytest.raises(IllegalAction, check=lambda e: e.code == "too_fast"):
+        game.act(seat, Post(chat="two"), now=3.0)
+    game.act(seat, Post(chat="two"), now=6.0)
+    with pytest.raises(IllegalAction, check=lambda e: e.code == "no_posts_left"):
+        game.act(seat, Post(chat="three"), now=12.0)
+
+
+def test_reply_to_must_be_public_post_this_day() -> None:
+    game = Game(config(seed=7))
+    end_night(game)
+    a, b = game.alive()[0], game.alive()[1]
+    game.act(a, Post(chat="hello"), now=0.0)
+    with pytest.raises(IllegalAction, check=lambda e: e.code == "invalid_target"):
+        game.act(b, Post(chat="reply", reply_to=99), now=0.0)
+    game.act(b, Post(chat="reply", reply_to=0), now=0.0)
+    end_discussion(game)
+    end_window_night(game)
+    # a post from yesterday is off-limits
+    with pytest.raises(IllegalAction, check=lambda e: e.code == "invalid_target"):
+        game.act(a, Post(chat="late reply", reply_to=0), now=0.0)
+
+
+def end_window_night(game: Game) -> None:
+    """Abstain defences and the vote or skip, then close the night."""
+    while game.phase == "defence":
+        for seat in sorted(game.pending()):
+            game.abstain(seat)
+    if game.phase == "day_vote":
+        for seat in sorted(game.pending()):
+            game.abstain(seat)
+    for seat in sorted(game.pending()):
+        game.abstain(seat)
+    assert game.phase == "day_discussion"

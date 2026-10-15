@@ -1,7 +1,11 @@
 """Pure Werewolf rules engine: no I/O, no wall clock, seeded RNG only."""
 
 from werewolf.engine.core import (
+    DEFENCE_S,
+    MAX_STANDING,
+    MIN_POST_GAP_S,
     POST_MAX,
+    POWERUP_PRICES,
     WOLF_CHAT_MAX,
     Action,
     Config,
@@ -22,12 +26,16 @@ from werewolf.engine.core import (
 __all__ = [
     "Action",
     "Config",
+    "DEFENCE_S",
     "DoctorSave",
     "Event",
     "Game",
     "IllegalAction",
+    "MAX_STANDING",
+    "MIN_POST_GAP_S",
     "NightKill",
     "Obligation",
+    "POWERUP_PRICES",
     "Phase",
     "Post",
     "POST_MAX",

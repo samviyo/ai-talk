@@ -79,13 +79,11 @@ def test_doctor_save_blocks_kill() -> None:
 
 
 def test_doctor_may_save_self_but_not_repeat() -> None:
-    game = Game(config(seed=7, rounds=0, max_days=5))
+    game = Game(config(seed=7, max_days=5))
     doctor = seats_with(game, "doctor")[0]
     assert doctor in game.legal_targets(doctor)
     play_night(game, {}, save=doctor)
-    while game.phase != "night":
-        for seat in sorted(game.pending()):
-            game.abstain(seat)
+    _to_next_night(game)
     # night 2: last night's save target is off-limits
     assert doctor not in game.legal_targets(doctor)
     with pytest.raises(IllegalAction, check=lambda e: e.code == "invalid_target"):
@@ -95,32 +93,34 @@ def test_doctor_may_save_self_but_not_repeat() -> None:
 def test_doctor_repeat_restriction_expires_after_a_night() -> None:
     game = Game(config(seed=7, max_days=9))
     doctor = seats_with(game, "doctor")[0]
-    wolves = seats_with(game, "werewolf")
     play_night(game, {}, save=doctor)
-    # clear the rest of day 1 with abstentions to reach night 2
-    while game.phase != "night":
-        for seat in sorted(game.pending()):
-            game.abstain(seat)
-    for wolf in wolves:
-        game.abstain(wolf)
-    seer = seats_with(game, "seer")[0]
-    game.abstain(seer)
-    game.act(doctor, DoctorSave(game.legal_targets(doctor)[0]))
+    _to_next_night(game)
+    for seat in sorted(game.pending()):
+        game.abstain(seat)
+    _to_next_night(game)
     # night 3: doctor may save itself again
-    while game.phase != "night":
-        for seat in sorted(game.pending()):
-            game.abstain(seat)
     assert doctor in game.legal_targets(doctor)
 
 
-def test_seer_result_private_and_correct() -> None:
+def _to_next_night(game: Game) -> None:
+    """Close the day (skip discussion, abstain votes) until night opens."""
+    while game.phase != "night":
+        if game.phase == "day_discussion":
+            game.close_discussion()
+            continue
+        for seat in sorted(game.pending()):
+            game.abstain(seat)
+
+
+def test_seer_result_deferred_until_night_resolves() -> None:
     game = Game(config(seed=7))
     seer = seats_with(game, "seer")[0]
     wolf = seats_with(game, "werewolf")[0]
     game.act(seer, SeerCheck(wolf))
-    result = next(
-        e.data for e in game.events(seer) if e.kind == "seer_result"
-    )
+    assert not any(e.kind == "seer_result" for e in game.events(seer))
+    for seat in sorted(game.pending()):
+        game.abstain(seat)
+    result = next(e.data for e in game.events(seer) if e.kind == "seer_result")
     assert result == {"seer": seer, "seat": wolf, "role": "werewolf"}
     others = [s for s in game.alive() if s != seer]
     assert all(

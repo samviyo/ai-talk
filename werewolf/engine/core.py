@@ -3,18 +3,35 @@
 from __future__ import annotations
 
 import random
+import re
 from collections import Counter
 from dataclasses import dataclass, field
 from typing import Any, Literal, TypeAlias
 
 Role: TypeAlias = Literal["werewolf", "seer", "doctor", "villager"]
-Phase: TypeAlias = Literal["night", "day_discussion", "day_vote", "over"]
+Phase: TypeAlias = Literal["night", "day_discussion", "defence", "day_vote", "over"]
 Result: TypeAlias = Literal["village", "wolves", "draw"]
-Obligation: TypeAlias = Literal["night_kill", "seer_check", "doctor_save", "post", "vote"]
+Obligation: TypeAlias = Literal["night_kill", "seer_check", "doctor_save", "defence", "vote"]
 
 ROLES: tuple[str, ...] = ("werewolf", "seer", "doctor", "villager")
 POST_MAX = 280
 WOLF_CHAT_MAX = 500
+WHISPER_MAX = 280
+MIN_POST_GAP_S = 5.0
+DEFENCE_S = 15.0
+MAX_STANDING = 3
+
+POWERUP_PRICES: dict[str, float] = {
+    "extra_post": 0.05,
+    "whisper": 0.08,
+    "double_vote": 0.15,
+    "shield": 0.20,
+    "frame": 0.15,
+}
+POWERUPS_DAY = ("extra_post", "whisper", "shield")
+DAY_WINDOWS = ("day_discussion", "defence", "day_vote")
+
+_MENTION = re.compile(r"(?:@|seat\s+)(\d+)", re.I)
 
 
 class IllegalAction(Exception):
@@ -30,19 +47,22 @@ class IllegalAction(Exception):
 class Config:
     seats: int
     wolves: int
-    discussion_rounds: int
     max_days: int
     seed: int
+    discussion_s: float = 60.0
+    max_posts: int = 3
 
     def __post_init__(self) -> None:
         if self.wolves < 1:
             raise ValueError("wolves must be >= 1")
         if self.seats < 2 * self.wolves + 3:
             raise ValueError(f"seats must be >= 2*wolves+3, got {self.seats}")
-        if self.discussion_rounds < 0:
-            raise ValueError("discussion_rounds must be >= 0")
         if self.max_days < 1:
             raise ValueError("max_days must be >= 1")
+        if self.discussion_s <= 0:
+            raise ValueError("discussion_s must be > 0")
+        if self.max_posts < 1:
+            raise ValueError("max_posts must be >= 1")
 
 
 @dataclass(frozen=True)
@@ -65,6 +85,9 @@ class Post:
     chat: str
     claimed_role: str | None = None
     accuse: int | None = None
+    reply_to: int | None = None
+    nominate: int | None = None
+    second: int | None = None
 
 
 @dataclass(frozen=True)
@@ -78,7 +101,7 @@ _OBLIGATION_ACTIONS: dict[Obligation, type] = {
     "night_kill": NightKill,
     "seer_check": SeerCheck,
     "doctor_save": DoctorSave,
-    "post": Post,
+    "defence": Post,
     "vote": Vote,
 }
 
@@ -116,10 +139,27 @@ class Game:
         self._pending: dict[int, Obligation] = {}
         self._acted: set[int] = set()
         self._ballots: dict[int, Action] = {}
-        self._post_seats: list[int] = []
-        self._post_actions: list[Post] = []
-        self._post_seq = 0
         self._last_save: int | None = None
+        # discussion state
+        self._posts: list[dict[str, Any]] = []
+        self._post_seq = 0
+        self._posts_today: Counter[int] = Counter()
+        self._post_times: dict[int, float] = {}
+        self._extra_posts: dict[int, int] = {}
+        self._nominations: dict[int, dict[str, Any]] = {}  # target -> {by, seconds}
+        self._nominated_today: set[int] = set()
+        self._seconded_today: set[int] = set()
+        self._wakened: dict[int, set[int]] = {}  # target -> from-seats that already woke it
+        self._day_cursors: dict[int, int] = {}  # seat -> board cursor at day start
+        self._standing: list[int] = []
+        self._defence_queue: list[int] = []
+        # night / power-up state
+        self._seer_checks: dict[int, int] = {}
+        self._frames: dict[int, int] = {}  # framed target -> buyer
+        self._shields: set[int] = set()
+        self._bought_today: dict[int, set[str]] = {}
+        self._double_voters: set[int] = set()
+        self._whispers: list[dict[str, Any]] = []  # delivered when the window closes
         self.phase: Phase = "night"
         self.day = 1
         self.round = 0
@@ -155,8 +195,16 @@ class Game:
         if obligation == "doctor_save":
             return [s for s in alive if s != self._last_save]
         if obligation == "vote":
-            return [s for s in alive if s != seat]
+            return list(self._standing)
         return []
+
+    def window_s(self) -> float:
+        """Nominal length of the open window, in seconds."""
+        if self.phase == "day_discussion":
+            return float(self.config.discussion_s)
+        if self.phase == "defence":
+            return DEFENCE_S
+        return 20.0
 
     def events(self, viewer: int | None) -> list[Event]:
         if viewer is None:
@@ -165,35 +213,194 @@ class Game:
             raise ValueError(f"unknown seat {viewer}")
         return [e for e in self._events if e.audience is None or viewer in e.audience]
 
+    def board_state(self, seat: int, since: int = 0) -> dict[str, Any]:
+        """The public board from one seat's view: posts, nominations, standing."""
+        posts = [p for p in self._posts if p["id"] >= since]
+        return {
+            "posts": posts,
+            "next": self._post_seq,
+            "nominations": self.nominations(),
+            "standing": list(self._standing),
+            "posts_left": self.posts_left(seat),
+        }
+
+    def nominations(self) -> list[dict[str, Any]]:
+        return [
+            {"target": t, "by": n["by"], "seconds": sorted(n["seconds"])}
+            for t, n in sorted(self._nominations.items())
+        ]
+
+    def posts_left(self, seat: int) -> int:
+        if self.phase != "day_discussion" or not self._alive[seat]:
+            return 0
+        limit = self.config.max_posts + self._extra_posts.get(seat, 0)
+        return max(0, limit - self._posts_today.get(seat, 0))
+
+    def unread_mentions(self, seat: int, cursor: int) -> list[dict[str, Any]]:
+        """Unbatched mentions for a seat beyond its board cursor."""
+        out: list[dict[str, Any]] = []
+        for e in self._events:
+            if e.kind != "mention":
+                continue
+            if e.audience is None or seat not in e.audience or e.data.get("batched"):
+                continue
+            if e.data["post_id"] < cursor:
+                continue
+            out.append(e.data)
+            e.data["batched"] = True
+        return out
+
     # --- mutations ---------------------------------------------------------
 
-    def act(self, seat: int, action: Action) -> None:
+    def act(self, seat: int, action: Action, now: float = 0.0) -> None:
+        if isinstance(action, Post) and self.phase == "day_discussion":
+            self._act_discussion_post(seat, action, now)
+            return
         obligation = self._check_turn(seat)
         expected = _OBLIGATION_ACTIONS[obligation]
         if not isinstance(action, expected):
             raise IllegalAction("bad_schema", f"{obligation} needs {expected.__name__}")
         if isinstance(action, Post):
-            if len(action.chat) > POST_MAX:
-                raise IllegalAction("too_long", f"chat > {POST_MAX} chars")
-            if action.claimed_role is not None and action.claimed_role not in ROLES:
-                raise IllegalAction("bad_schema", f"unknown role {action.claimed_role!r}")
-            if action.accuse is not None and action.accuse not in self.alive():
-                raise IllegalAction("invalid_target", f"cannot accuse {action.accuse}")
+            self._validate_post(seat, action, obligation, now)
         elif action.target not in self.legal_targets(seat):
             raise IllegalAction("invalid_target", f"bad target {action.target}")
         self._acted.add(seat)
         if isinstance(action, SeerCheck):
-            self._emit(
-                "seer_result",
-                {"seer": seat, "seat": action.target, "role": self._roles[action.target]},
-                audience=frozenset({seat}),
-            )
-        elif isinstance(action, Post):
-            self._post_seats.append(seat)
-            self._post_actions.append(action)
-        else:
+            self._seer_checks[seat] = action.target
+            self._emit_night_action(seat, "check", action.target)
+        elif isinstance(action, NightKill):
             self._ballots[seat] = action
-        self._maybe_close()
+            self._emit_night_action(seat, "kill", action.target)
+            self._maybe_close()
+        elif isinstance(action, DoctorSave):
+            self._ballots[seat] = action
+            self._emit_night_action(seat, "save", action.target)
+            self._maybe_close()
+        elif isinstance(action, Post):
+            self._record_post(seat, action, now)
+            if obligation == "defence":
+                self._maybe_close()
+        elif isinstance(action, Vote):
+            self._ballots[seat] = action
+            weight = 2 if seat in self._double_voters else 1
+            self._emit(
+                "ballot",
+                {"seat": seat, "target": action.target, "weight": weight},
+                audience=frozenset(),
+            )
+            self._maybe_close()
+
+    def _act_discussion_post(self, seat: int, action: Post, now: float) -> None:
+        """Discussion posts owe no obligation; the window is timed, not turn-based."""
+        if self.result is not None:
+            raise IllegalAction("not_your_turn", "game over")
+        self._check_seat(seat)
+        if not self._alive[seat]:
+            raise IllegalAction("dead_seat", f"seat {seat} is dead")
+        self._validate_post(seat, action, "post", now)
+        self._record_post(seat, action, now)
+
+    def _validate_post(
+        self, seat: int, action: Post, obligation: Obligation | str, now: float
+    ) -> None:
+        if len(action.chat) > POST_MAX:
+            raise IllegalAction("too_long", f"chat > {POST_MAX} chars")
+        if action.claimed_role is not None and action.claimed_role not in ROLES:
+            raise IllegalAction("bad_schema", f"unknown role {action.claimed_role!r}")
+        if action.accuse is not None and action.accuse not in self.alive():
+            raise IllegalAction("invalid_target", f"cannot accuse {action.accuse}")
+        if action.reply_to is not None:
+            found = next(
+                (p for p in self._posts if p["id"] == action.reply_to), None
+            )
+            if found is None:
+                raise IllegalAction("invalid_target", f"no public post {action.reply_to}")
+            if found["day"] != self.day:
+                raise IllegalAction(
+                    "invalid_target", f"post {action.reply_to} is from another day"
+                )
+        if obligation == "defence":
+            if action.nominate is not None or action.second is not None:
+                raise IllegalAction("not_available", "no nominations in a defence")
+            return
+        if self.posts_left(seat) <= 0:
+            raise IllegalAction("no_posts_left", f"seat {seat} is out of posts today")
+        last = self._post_times.get(seat)
+        if last is not None and now - last < MIN_POST_GAP_S:
+            raise IllegalAction("too_fast", f"5s between posts, {now - last:.1f}s elapsed")
+        if action.nominate is not None:
+            if action.nominate not in self.alive():
+                raise IllegalAction("invalid_target", f"cannot nominate {action.nominate}")
+            if seat in self._nominated_today:
+                raise IllegalAction("already_acted", "already nominated today")
+        if action.second is not None:
+            if action.second not in self._nominations:
+                raise IllegalAction("invalid_target", f"nobody nominated {action.second}")
+            if seat in self._seconded_today:
+                raise IllegalAction("already_acted", "already seconded today")
+            if self._nominations[action.second]["by"] == seat:
+                raise IllegalAction("invalid_target", "cannot second your own nomination")
+
+    def _record_post(self, seat: int, action: Post, now: float) -> None:
+        post = {
+            "id": self._post_seq,
+            "seat": seat,
+            "day": self.day,
+            "round": self.round,
+            "chat": action.chat,
+            "claimed_role": action.claimed_role,
+            "accuse": action.accuse,
+            "reply_to": action.reply_to,
+            "nominate": action.nominate,
+            "second": action.second,
+        }
+        self._post_seq += 1
+        self._posts.append(post)
+        self._emit("posts_revealed", {"posts": [post]})
+        if self._pending.get(seat) != "defence":
+            self._posts_today[seat] += 1
+            self._post_times[seat] = now
+        if action.nominate is not None:
+            self._nominated_today.add(seat)
+            if action.nominate not in self._nominations:
+                self._nominations[action.nominate] = {"by": seat, "seconds": set()}
+                self._emit("nomination", {"seat": seat, "target": action.nominate})
+        if action.second is not None:
+            self._seconded_today.add(seat)
+            self._nominations[action.second]["seconds"].add(seat)
+            self._emit("seconded", {"seat": seat, "target": action.second})
+        self._emit_mentions(seat, post)
+
+    def _emit_night_action(self, seat: int, action: str, target: int) -> None:
+        """Audience-only beat so the projector shows the night unfolding."""
+        self._emit(
+            "night_action",
+            {"seat": seat, "role": self._roles[seat], "action": action, "target": target},
+            audience=frozenset(),
+        )
+
+    def _emit_mentions(self, seat: int, post: dict[str, Any]) -> None:
+        targets: set[int] = set()
+        if post["reply_to"] is not None:
+            parent = next(
+                (p for p in self._posts if p["id"] == post["reply_to"]), None
+            )
+            if parent is not None:
+                targets.add(parent["seat"])
+        for m in _MENTION.finditer(post["chat"]):
+            targets.add(int(m.group(1)))
+        for t in sorted(targets):
+            if t == seat or not (0 <= t < self.config.seats) or not self._alive[t]:
+                continue
+            woken = self._wakened.setdefault(t, set())
+            if seat in woken:
+                continue
+            woken.add(seat)
+            self._emit(
+                "mention",
+                {"seat": t, "from": seat, "post_id": post["id"], "chat": post["chat"]},
+                audience=frozenset({t}),
+            )
 
     def abstain(self, seat: int) -> None:
         self._check_turn(seat)
@@ -211,6 +418,114 @@ class Game:
         if len(msg) > WOLF_CHAT_MAX:
             raise IllegalAction("too_long", f"wolf chat > {WOLF_CHAT_MAX} chars")
         self._emit("wolf_chat", {"seat": seat, "msg": msg}, audience=self._wolves)
+
+    # --- power-ups ----------------------------------------------------------
+
+    def apply_powerup(
+        self,
+        seat: int,
+        item: str,
+        target: int | None = None,
+        msg: str | None = None,
+    ) -> dict[str, Any]:
+        """Validate and apply a purchase; the server charges the ledger."""
+        if self.result is not None:
+            raise IllegalAction("not_your_turn", "game over")
+        self._check_seat(seat)
+        if not self._alive[seat]:
+            raise IllegalAction("dead_seat", f"seat {seat} is dead")
+        if item not in POWERUP_PRICES:
+            raise IllegalAction("not_available", f"unknown item {item!r}")
+        bought = self._bought_today.setdefault(self.day, set())
+        key_once_day = f"{item}:{seat}"
+        if item in ("extra_post", "whisper", "shield", "frame") and key_once_day in bought:
+            raise IllegalAction("already_bought", f"{item} already bought today/tonight")
+        if item == "extra_post":
+            if self.phase != "day_discussion":
+                raise IllegalAction("not_available", "extra_post only during discussion")
+            self._extra_posts[seat] = self._extra_posts.get(seat, 0) + 1
+        elif item == "whisper":
+            if self.phase not in DAY_WINDOWS:
+                raise IllegalAction("not_available", "whisper only during day windows")
+            if target is None or target == seat or target not in self.alive():
+                raise IllegalAction("invalid_target", f"bad whisper target {target}")
+            if msg is None or not msg:
+                raise IllegalAction("bad_schema", "whisper needs a msg")
+            if len(msg) > WHISPER_MAX:
+                raise IllegalAction("too_long", f"whisper > {WHISPER_MAX} chars")
+            self._whispers.append({"seat": seat, "target": target, "msg": msg})
+        elif item == "double_vote":
+            if self.phase != "day_vote":
+                raise IllegalAction("not_available", "double_vote only in the vote window")
+            if seat in self._double_voters:
+                raise IllegalAction("already_bought", "double_vote already bought this game")
+            self._double_voters.add(seat)
+        elif item == "shield":
+            if self.phase not in DAY_WINDOWS:
+                raise IllegalAction("not_available", "shield only during day windows")
+            if seat in self._wolves:
+                raise IllegalAction("not_available", "wolves cannot buy a shield")
+            if self.day >= self.config.max_days:
+                raise IllegalAction("not_available", "no shield on the last day")
+            self._shields.add(seat)
+        elif item == "frame":
+            if self.phase != "night":
+                raise IllegalAction("not_available", "frame only during a night window")
+            if seat not in self._wolves:
+                raise IllegalAction("not_available", "wolves only")
+            if target is None or target not in self.alive() or target in self._wolves:
+                raise IllegalAction("invalid_target", f"bad frame target {target}")
+            self._frames[target] = seat
+            self._emit_night_action(seat, "frame", target)
+        if item != "double_vote":
+            bought.add(key_once_day)
+        self._emit(
+            "powerup",
+            {"seat": seat, "item": item, "target": target},
+            audience=frozenset({seat}),
+        )
+        return {"price_usd": POWERUP_PRICES[item]}
+
+    def shop(self, seat: int) -> list[dict[str, Any]]:
+        """Availability per item without charging; mirrors apply_powerup's rules."""
+        out = []
+        for item, price in POWERUP_PRICES.items():
+            entry: dict[str, Any] = {"item": item, "price_usd": price, "available": False}
+            try:
+                self._check_powerup(seat, item)
+                entry["available"] = True
+            except IllegalAction as e:
+                entry["reason"] = e.code
+            out.append(entry)
+        return out
+
+    def _check_powerup(self, seat: int, item: str) -> None:
+        if self.result is not None or not self._alive[seat]:
+            raise IllegalAction("not_available")
+        bought = self._bought_today.get(self.day, set())
+        if f"{item}:{seat}" in bought:
+            raise IllegalAction("already_bought")
+        if item == "extra_post":
+            if self.phase != "day_discussion":
+                raise IllegalAction("not_available")
+        elif item == "whisper":
+            if self.phase not in DAY_WINDOWS:
+                raise IllegalAction("not_available")
+        elif item == "double_vote":
+            if self.phase != "day_vote" or seat in self._double_voters:
+                raise IllegalAction("not_available")
+        elif item == "shield":
+            if (
+                self.phase not in DAY_WINDOWS
+                or seat in self._wolves
+                or self.day >= self.config.max_days
+            ):
+                raise IllegalAction("not_available")
+        elif item == "frame":
+            if self.phase != "night" or seat not in self._wolves:
+                raise IllegalAction("not_available")
+        else:
+            raise IllegalAction("not_available", f"unknown item {item!r}")
 
     # --- internals ---------------------------------------------------------
 
@@ -232,31 +547,95 @@ class Game:
         return obligation
 
     def _maybe_close(self) -> None:
+        if self.phase == "day_discussion":
+            return  # timed window: only close_discussion() ends it
         if len(self._acted) == len(self._pending):
             self._close_window()
 
     def _close_window(self) -> None:
+        """Night, defence and vote windows close when every obligation clears."""
+        self._flush_whispers()
         if self.phase == "night":
             self._resolve_night()
-        elif self.phase == "day_discussion":
-            self._reveal_posts()
+            if self.result is None:
+                self._start_day()
+                self._open_window("day_discussion")
+        elif self.phase == "defence":
+            self._next_defence()
         elif self.phase == "day_vote":
             self._resolve_vote()
-        if self.result is None:
-            self._advance_window()
+            if self.result is None:
+                self._finish_day()
+
+    def close_discussion(self) -> None:
+        """Timed close of the discussion window: pick nominees, open defences."""
+        if self.phase != "day_discussion":
+            raise IllegalAction("not_your_turn", "no discussion window open")
+        self._flush_whispers()
+        ranked = sorted(
+            self._nominations.items(),
+            key=lambda kv: (-len(kv[1]["seconds"]), self._rng.random()),
+        )
+        self._standing = sorted(t for t, _ in ranked[:MAX_STANDING])
+        if self._standing:
+            self._emit("standing", {"targets": list(self._standing)})
+            self._defence_queue = list(self._standing)
+            self._next_defence()
+        else:
+            self._emit("vote_skipped", {"silent": self._silent_seats()})
+            self._finish_day()
+
+    def _finish_day(self) -> None:
+        if self.day >= self.config.max_days:
+            self._finish("draw")
+        else:
+            self.day += 1
+            self._open_window("night")
+
+    def _flush_whispers(self) -> None:
+        """Whispers bought in a window land when it closes."""
+        for w in self._whispers:
+            self._emit(
+                "whisper",
+                {"seat": w["seat"], "target": w["target"], "msg": w["msg"]},
+                audience=frozenset({w["seat"], w["target"]}),
+            )
+        self._whispers = []
+
+    def _silent_seats(self) -> list[int]:
+        return [s for s in self.alive() if self._posts_today.get(s, 0) == 0]
+
+    def _next_defence(self) -> None:
+        """Open the next standing nominee's defence window, or the vote."""
+        while self._defence_queue:
+            seat = self._defence_queue.pop(0)
+            if self._alive[seat]:
+                self._open_window("defence", seat)
+                return
+        self._open_window("day_vote")
 
     def _resolve_night(self) -> None:
         kill_votes = [a.target for a in self._ballots.values() if isinstance(a, NightKill)]
         save = next(
             (a.target for a in self._ballots.values() if isinstance(a, DoctorSave)), None
         )
+        for seer, target in self._seer_checks.items():
+            role: Role = "werewolf" if target in self._frames else self._roles[target]
+            self._emit(
+                "seer_result",
+                {"seer": seer, "seat": target, "role": role},
+                audience=frozenset({seer}),
+            )
         kill_target = None
         if kill_votes:
             counts = Counter(kill_votes)
             top = max(counts.values())
             tied = sorted(t for t, c in counts.items() if c == top)
             kill_target = self._rng.choice(tied)
-        killed = kill_target if kill_target is not None and kill_target != save else None
+        protected = kill_target is not None and (
+            kill_target == save or kill_target in self._shields
+        )
+        killed = kill_target if kill_target is not None and not protected else None
         self._last_save = save
         self._emit(
             "night_result",
@@ -267,75 +646,60 @@ class Game:
             self._kill(killed, "night")
         else:
             self._emit("no_death", {"cause": "night"})
+        self._shields = set()  # a shield protects one night only
         self._check_end()
 
-    def _reveal_posts(self) -> None:
-        posts = []
-        for seat, post in zip(self._post_seats, self._post_actions):
-            posts.append(
-                {
-                    "id": self._post_seq,
-                    "seat": seat,
-                    "day": self.day,
-                    "round": self.round,
-                    "chat": post.chat,
-                    "claimed_role": post.claimed_role,
-                    "accuse": post.accuse,
-                }
-            )
-            self._post_seq += 1
-        self._emit("posts_revealed", {"posts": posts})
-
     def _resolve_vote(self) -> None:
-        ballots = [
-            {
-                "seat": s,
-                "target": self._ballots[s].target if s in self._ballots else None,
-            }
-            for s in self._pending
-        ]
-        targets = [b["target"] for b in ballots if b["target"] is not None]
+        ballots = []
+        for s in self._pending:
+            target = self._ballots[s].target if s in self._ballots else None
+            weight = 2 if s in self._double_voters and target is not None else 1
+            ballots.append({"seat": s, "target": target, "weight": weight})
+        totals: Counter[int] = Counter()
+        for b in ballots:
+            if b["target"] is not None:
+                totals[b["target"]] += b["weight"]
         eliminated = None
-        if targets:
-            counts = Counter(targets)
-            top = max(counts.values())
-            tied = sorted(t for t, c in counts.items() if c == top)
+        if totals:
+            top = max(totals.values())
+            tied = sorted(t for t, c in totals.items() if c == top)
             # a tie eliminates nobody, unlike the night's seeded tie-break
             if len(tied) == 1:
                 eliminated = tied[0]
-        self._emit("vote_tally", {"ballots": ballots, "eliminated": eliminated})
+        tally = {"ballots": ballots, "eliminated": eliminated}
+        silent = self._silent_seats()
+        if silent:
+            tally["silent"] = silent
+        self._emit("vote_tally", tally)
         if eliminated is not None:
             self._kill(eliminated, "vote")
         else:
             self._emit("no_death", {"cause": "vote"})
         self._check_end()
 
-    def _advance_window(self) -> None:
-        if self.phase == "night":
-            if self.config.discussion_rounds > 0:
-                self.phase, self.round = "day_discussion", 1
-            else:
-                self.phase, self.round = "day_vote", 0
-        elif self.phase == "day_discussion":
-            if self.round < self.config.discussion_rounds:
-                self.round += 1
-            else:
-                self.phase, self.round = "day_vote", 0
-        elif self.phase == "day_vote":
-            if self.day >= self.config.max_days:
-                self._finish("draw")
-                return
-            self.day += 1
-            self.phase, self.round = "night", 0
-        self._open_window()
+    def _start_day(self) -> None:
+        self._posts_today = Counter()
+        self._post_times = {}
+        self._extra_posts = {}
+        self._nominations = {}
+        self._nominated_today = set()
+        self._seconded_today = set()
+        self._wakened = {}
+        self._standing = []
+        self._defence_queue = []
+        self._day_cursors = {s: self._post_seq for s in self.alive()}
 
-    def _open_window(self) -> None:
+    def _open_window(self, phase: Phase | None = None, defence_seat: int | None = None) -> None:
+        if phase is not None:
+            self.phase = phase
+        self.round = 1 if self.phase == "day_discussion" else 0
         self._acted = set()
         self._ballots = {}
-        self._post_seats = []
-        self._post_actions = []
         if self.phase == "night":
             pending: dict[int, Obligation] = {}
+            self._seer_checks = {}
+            self._frames = {}
+            # shields persist from the day into the night; cleared after it resolves
             for s in self.alive():
                 role = self._roles[s]
                 if role == "werewolf":
@@ -346,10 +710,15 @@ class Game:
                     pending[s] = "doctor_save"
             self._pending = pending
         elif self.phase == "day_discussion":
-            self._pending = {s: "post" for s in self.alive()}
+            self._pending = {}
+        elif self.phase == "defence":
+            assert defence_seat is not None
+            self._pending = {defence_seat: "defence"}
+            self._emit("defence", {"seat": defence_seat})
         elif self.phase == "day_vote":
             self._pending = {s: "vote" for s in self.alive()}
-        self.turn_id = f"{self.phase}:{self.day}:{self.round}"
+        suffix = f"defence:{defence_seat}" if defence_seat is not None else str(self.round)
+        self.turn_id = f"{self.phase}:{self.day}:{suffix}"
         self._emit(
             "phase",
             {
@@ -357,6 +726,7 @@ class Game:
                 "day": self.day,
                 "round": self.round,
                 "turn_id": self.turn_id,
+                **({"seat": defence_seat} if defence_seat is not None else {}),
             },
         )
 
