@@ -8,7 +8,7 @@ Source of truth for the shared contracts. Talk content lives in
 Everything runs on laptops. No hosted infra.
 
 - **Practice:** each team runs `ww serve` locally plus house bots and its own bot.
-- **Finale:** teams push their bot to a branch; Sam's laptop runs `ww serve --final`,
+- **Finale:** teams push their bot to a branch; Sam's laptop runs `ww final final.toml`,
   launches every team bot as a subprocess, and projects the spectator view.
 - **LLM calls:** bots never hold a Bifrost key. They call the game server's
   OpenAI-compatible proxy (`POST /llm/v1/chat/completions`) with their seat token. The
@@ -20,12 +20,22 @@ Everything runs on laptops. No hosted infra.
 | Path | Unit |
 |---|---|
 | `werewolf/engine/` | Pure rules engine. No I/O, no clock, seeded RNG |
-| `werewolf/server/` | MCP server, board, spectator SSE, LLM proxy, budget, table runner, CLI `ww` |
+| `werewolf/server/` | MCP server, board, spectator SSE, LLM proxy, budget, table runner, finale launcher, CLI `ww` |
 | `werewolf/housebots/` | random, quiet, accuser, baseline |
 | `connect4/` | Part 1: engine, solver, puzzles, naive bot, eval harness |
 | `starter/` | Team kit: bot template, werewolf eval harness, `evals/` lock hook |
 
 Python 3.12, `uv`, one workspace `pyproject.toml` at the root. Tests with `pytest`.
+
+## Roles and formats
+
+Exactly 1 seer, 1 doctor, `wolves` werewolves, the rest villagers. `Config` validation
+rejects `seats < 2 * wolves + 3`. Roles are assigned by a shuffle from `seed`.
+
+| Format | Seats | Wolves | Discussion rounds | Max days |
+|---|---|---|---|---|
+| practice | 7 | 2 | 2 | 5 |
+| final | 10–12 | 3 | 1 | 6 |
 
 ## Engine contract (`werewolf/engine`)
 
@@ -35,69 +45,112 @@ Phase = Literal["night", "day_discussion", "day_vote", "over"]
 
 @dataclass(frozen=True)
 class Config:
-    seats: int                 # 7 practice, 10-12 final
-    wolves: int                # 2 practice, 3 final
-    discussion_rounds: int     # 2 practice, 1 final
+    seats: int
+    wolves: int
+    discussion_rounds: int
+    max_days: int
     seed: int
 
 class Game:
     def __init__(self, config: Config): ...
-    phase: Phase; day: int; round: int          # round = discussion round within the day
+    phase: Phase; day: int; round: int
+    turn_id: str                                 # changes every time a window opens
     def role(self, seat: int) -> Role: ...
     def alive(self) -> list[int]: ...
-    def pending(self) -> dict[int, list[str]]:  # seat -> allowed action kinds right now
-    def act(self, seat: int, action: Action) -> None  # raises IllegalAction(code, msg)
-    def abstain(self, seat: int) -> None        # used by the clock and by broke seats
+    def pending(self) -> dict[int, str]:          # seat -> the one obligation it owes now
+    def act(self, seat: int, action: Action) -> None   # raises IllegalAction(code, msg)
+    def abstain(self, seat: int) -> None
+    def wolf_chat(self, seat: int, msg: str) -> None   # optional; never clears an obligation
+    def legal_targets(self, seat: int) -> list[int]
     def events(self, viewer: int | None) -> list[Event]  # viewer=None is omniscient
-    winner: Literal["village", "wolves"] | None
+    result: Literal["village", "wolves", "draw"] | None
 ```
 
-- Actions: `NightKill(target)`, `SeerCheck(target)`, `DoctorSave(target)`,
-  `Post(chat, claimed_role=None, accuse=None)`, `Vote(target)`, `WolfChat(msg)`.
-- The phase advances when every seat in `pending()` has acted or abstained.
-- Night: wolves must agree. The kill is the target with the most wolf votes; ties are
-  broken by the seeded RNG. Doctor may save self, not the same seat two nights running.
-- Vote: plurality is eliminated; a tie eliminates nobody. The role is revealed on death.
-- Win: no wolves alive → village; wolves ≥ non-wolves → wolves.
-- `events(viewer)` must never leak a role the viewer could not know. This is tested by
-  scanning every event a non-omniscient viewer sees across 100 seeded games.
-- Error codes: `not_your_turn`, `invalid_target`, `dead_seat`, `bad_schema`, `too_long`
-  (chat > 280 chars).
+**Windows.** The game is a sequence of windows: each night, each discussion round, each
+vote. A window opens for every seat in `pending()` at once and closes when all of them
+have acted or abstained. `turn_id` identifies the open window.
+
+**Obligations.** `pending()` maps a seat to exactly one obligation: `night_kill`,
+`seer_check`, `doctor_save`, `post` or `vote`. Villagers owe nothing at night. One
+accepted action or one abstention clears it; a second action returns `already_acted`.
+
+**Night.** Each living wolf submits one `NightKill`. The kill is the plurality target among
+submitted ballots; a tie is broken by the seeded RNG; zero ballots means no kill. The
+doctor may save itself, but not the same seat two nights running. A saved target lives.
+
+**Discussion.** Posts made during a round are held privately and revealed together when
+the window closes, so posting early never costs information.
+
+**Vote.** Ballots are private until resolution. Plurality is eliminated; a tie or zero
+ballots eliminates nobody. The role is revealed on death.
+
+**End.** No wolves alive → `village`. Wolves ≥ non-wolves → `wolves`. If day `max_days`
+ends with neither, the result is `draw`.
+
+**Visibility.** `events(viewer)` returns only what that seat may know: its own role, wolf
+partners and wolf chat for wolves, its own seer results, public posts after reveal, deaths
+with revealed roles, and vote tallies after resolution.
+
+Error codes: `not_your_turn`, `already_acted`, `stale_turn`, `invalid_target`,
+`dead_seat`, `bad_schema`, `too_long` (chat > 280 chars, wolf chat > 500).
 
 ## MCP tools (`werewolf/server`, streamable HTTP at `/mcp`)
 
-Auth: `Authorization: Bearer <seat token>`. Each token maps to (table, seat, team).
+Auth: `Authorization: Bearer <seat token>`. A seat token maps to (table, game, seat, team)
+and authorizes only that seat's view. The server serializes every mutation, clock check
+and phase advance per table under one lock.
 
 | Tool | Returns |
 |---|---|
-| `wait_for_turn(timeout_s=25)` | `{phase, day, round, you_may:[...], announcements:[...], deadline_s}` or `{status:"waiting"}` on timeout. The only moderator channel |
-| `get_my_role()` | `{role, partners:[seat]}` |
-| `read_board(since=0)` | `{posts:[{id, seat, day, round, chat, claimed_role, accuse}], next}` |
-| `post(chat, claimed_role?, accuse?)` | `{ok}` |
-| `vote(seat)` | `{ok}` |
-| `night_action(target)` | `{ok}` (kill, check or save by role; a seer check also returns `{role}`) |
-| `wolf_chat(msg)` / `read_wolf_chat(since=0)` | `{ok}` / `{messages, next}` |
+| `wait_for_turn(timeout_s=25)` | `{turn_id, phase, day, round, you_owe, legal_targets, announcements, deadline_s}`, or `{status:"waiting"}` on timeout, or `{status:"over", result}`. Wakes immediately when a window opens for this seat. The only moderator channel |
+| `get_my_role()` | `{seat, role, partners}`. `partners` is empty unless werewolf |
+| `read_board(since=0)` | `{posts:[{id, seat, day, round, chat, claimed_role, accuse}], next}`. Revealed posts only |
+| `post(turn_id, chat, claimed_role?, accuse?)` | `{ok}` |
+| `vote(turn_id, seat)` | `{ok}` |
+| `night_action(turn_id, target)` | `{ok}`; a seer check also returns `{role}` |
+| `wolf_chat(msg)` / `read_wolf_chat(since=0)` | Werewolves only; others get `not_your_turn` |
 | `get_budget()` | `{spent_usd, limit_usd, remaining_usd, broke}` |
 
 Server rules:
-- A budget of 10 tool calls per seat per phase. Past that, calls return `call_budget_exceeded`.
-- Phase clock: 20s per action, enforced lazily on every request and by a 1s ticker task.
-  A missed deadline means the seat abstains.
-- Every tool call is appended to `runs/<table>/trace.jsonl`:
-  `{ts, seat, tool, args, result_code, latency_ms}`.
-- Board content is returned as data only; announcements only come from `wait_for_turn`.
+- Mutations need the current `turn_id`; an old one returns `stale_turn`.
+- A budget of 10 tool calls per seat per window. Past that, calls return
+  `call_budget_exceeded`.
+- **Clock:** each window's deadline is 20s after it opens (30s in the final), measured on
+  the monotonic clock. A 1s ticker and every request check it under the table lock. An
+  action that arrives after the deadline is rejected with `stale_turn`. Reading and
+  waiting never extend a deadline.
+- Missed deadline: a funded seat abstains. A broke or dead-process seat gets the
+  fallback below.
+- The leak test scans every MCP response, including errors and announcements, for every
+  seat across 100 seeded games and asserts no role is visible that the seat may not know.
+- Traces: every tool call is buffered as `{ts, seat, tool, args, result_code, latency_ms}`
+  and written to `runs/<table>/<game>/trace.jsonl` when the game ends, never while it runs.
 
-## LLM proxy and budget
+## Budget and fallback
 
-- `POST /llm/v1/chat/completions`, OpenAI-compatible, bearer = seat token.
-- Forwards to `${BIFROST_BASE_URL}/v1/chat/completions` with the team's virtual key from
-  `teams.toml`. `BIFROST_BASE_URL` comes from the environment, no default to prod.
-- Cost = usage tokens × price from `prices.toml` (per model, USD per 1M in/out tokens).
-- An in-flight call completes. Once `spent ≥ limit` the seat is broke: proxy returns 402,
-  `post` returns `broke`, and the server rolls the seat's actions randomly. A funded wolf
-  still picks the pack's kill.
-- `teams.toml`: `[teams.<name>] bifrost_key_env = "..."`. Keys live in env vars, never in
-  files committed to git.
+- Allowance: `--budget-usd` per seat per game (default 0.50, set properly after the dry
+  run). The ledger key is (table, game, seat); it resets each game.
+- House bots use a separate house key and are not metered against the game.
+- **Broke** means `spent ≥ limit`. From then the proxy returns 402 and `post` returns
+  `broke`. A seat whose bot process has exited is treated the same way.
+- **Fallback at the deadline** for a broke seat: vote, seer check and doctor save are
+  random legal targets; no post. A broke wolf submits no kill ballot while any funded wolf
+  is alive; if every living wolf is broke, one random legal kill is submitted.
+
+## LLM proxy
+
+- `POST /llm/v1/chat/completions`, OpenAI-compatible subset, bearer = seat token.
+- Only models listed in `prices.toml` are allowed (`model_not_allowed` otherwise).
+  `stream=true` is rejected. `max_tokens` is required and capped at 2048.
+- One in-flight call per seat; a second concurrent call returns 409. So the only
+  overshoot is one call, bounded by `max_tokens`.
+- Forwards to `${BIFROST_BASE_URL}/v1/chat/completions` with the team's virtual key.
+  `BIFROST_BASE_URL` comes from the environment, with no default to prod.
+- Charge = usage × price. If usage is missing, charge input as chars/4 plus `max_tokens`
+  of output. If the upstream call errors or times out (60s), charge the input estimate.
+  Nothing is ever free by accident.
+- `teams.toml`: `[teams.<name>] bifrost_key_env = "..."`. Keys live in env vars of the
+  server process only.
 - `--fake-llm` mode returns canned completions with synthetic usage, for tests and dry
   runs without network.
 
@@ -105,27 +158,49 @@ Server rules:
 
 - `GET /` serves one static HTML page; `GET /events` is SSE of omniscient events plus
   per-seat spend and broke state. Roles are shown. Broke seats grey out.
+- Both need the operator token (`?op=<token>`, printed at startup). Seat tokens are
+  refused.
+
+## Finale (`ww final final.toml`)
+
+```toml
+seats = 12
+seed = 2026
+[[teams]]
+name = "wolfpack"
+repo = "git@github.com:...#<commit>"   # pinned commit
+cmd = "uv run bot"                     # run inside the checkout
+```
+
+- Teams fill seats in a seeded order; house bots (baseline) fill the rest.
+- Each bot gets only `WW_SERVER`, `WW_TOKEN`, `PATH` and `HOME`. No other env is
+  inherited, so no Bifrost key can leak to team code.
+- **Readiness barrier:** the game starts once every seat has called `get_my_role`, or
+  after 90s. A seat that is not ready by then is replaced by a baseline house bot.
+- A bot process that exits mid-game is treated as broke for the rest of the game.
+- `ww final --check final.toml` clones, installs and smoke-starts every bot, then exits.
 
 ## CLI
 
-- `ww serve [--seats 7] [--final] [--fake-llm] [--tables N]`
+- `ww serve [--format practice|final] [--seats N] [--fake-llm] [--tables N] [--budget-usd X]`
 - `ww table --bots random,quiet,accuser,baseline,...` runs house bots against a server.
 - `ww tokens` prints seat tokens for a table.
+- `ww final [--check] final.toml`
 
 ## Connect Four (`connect4/`)
 
-- Engine (7×6), a perfect-ish solver (negamax with alpha-beta, depth-limited is fine for
-  puzzle generation), puzzle sets `win_in_1` and `block_in_1` generated from the solver.
+- Engine (7×6), a solver (negamax with alpha-beta; depth-limited is fine), puzzle sets
+  `win_in_1` and `block_in_1` generated from the solver.
 - `bots/naive.py`: one LLM call per move through Bifrost (direct, env
   `BIFROST_BASE_URL` + `BIFROST_API_KEY`, OpenAI-compatible), prompt-only.
-- `make eval` runs the checks in the talk doc and prints a scoreboard, including the
+- `make eval-c4` runs the checks in the talk doc and prints a scoreboard, including the
   always-column-0 negative control.
 - `tournament.py`: round-robin between bot modules.
 
 ## Starter kit (`starter/`)
 
 - `bot/`: a minimal MCP-driven Werewolf agent that calls the proxy. It plays legally
-  but badly.
+  but badly. Started with `uv run bot`, reading `WW_SERVER` and `WW_TOKEN`.
 - `evals/`: the team-facing checks from the talk doc, reading traces and engine logs.
 - `.claude/settings.json` with a PreToolUse hook that blocks edits under `evals/`.
 - `make eval`, `make practice` (spins up a local server and house bots).
