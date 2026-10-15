@@ -156,6 +156,10 @@ Server rules:
 - Charge = usage × price. If usage is missing, charge input as chars/4 plus `max_tokens`
   of output. If the upstream call errors or times out (60s), charge the input estimate.
   Nothing is ever free by accident.
+- Upstream auth sends the key as both `Authorization: Bearer` and `x-bf-vk`. The developer
+  gateway (`https://developer-gateway.services.clovesoftware-dev.com`) accepts
+  `/v1/chat/completions` with a personal key and returns OpenAI usage, so dogfooding can use
+  it before team keys exist. Seed `prices.toml` from the gateway's published model costs.
 - `teams.toml`: `[teams.<name>] bifrost_key_env = "..."`. Keys live in env vars of the
   server process only.
 - `--fake-llm` mode returns canned completions with synthetic usage, for tests and dry
