@@ -35,20 +35,45 @@ class Brain(Protocol):
 class BaseBrain:
     """Shared state: seeded RNG and the set of seats seen so far."""
 
+    #: delay before the staggered opening post, seconds into the discussion
+    OPENER_SPREAD_S = 20.0
+
     def __init__(self, seed: int):
         self.rng = random.Random(seed)
         self._known: set[int] = set()
+        self._opener_delay = self.rng.uniform(0.0, self.OPENER_SPREAD_S)
+        self._bought: set[str] = set()
+
+    def opener_delay(self) -> float:
+        return self._opener_delay
+
+    def maybe_buy(self, view: View) -> Action | None:
+        """One optional purchase per day; brains override to buy."""
+        return None
 
     def decide(self, view: View) -> Action | None:
         self._observe(view)
         owe = (view.get("turn") or {}).get("you_owe")
+        intent = view.get("intent")
+        if intent in ("opener", "reply", "talk"):
+            return self._chat(view, intent)
         if owe == "vote":
             return self._vote(view)
-        if owe == "post":
-            return self._post(view)
+        if owe == "defence":
+            return self._defence(view)
         if owe in ("night_kill", "seer_check", "doctor_save"):
             return self._night(view, owe)
         return None
+
+    def _chat(self, view: View, intent: str) -> Action | None:
+        return None
+
+    def _defence(self, view: View) -> Action | None:
+        return {
+            "tool": "post",
+            "args": {"chat": "I am innocent. Look at the votes, not at me."},
+            "reason": "defending myself",
+        }
 
     def _observe(self, view: View) -> None:
         self._known.add(view["seat"])
@@ -71,9 +96,15 @@ class BaseBrain:
     def _vote_candidates(self, view: View) -> list[int]:
         # No brain ever votes a wolf partner.
         legal = self._legal(view)
+        if legal:
+            candidates = legal
+        else:
+            # discussion/vote nomination pool: living seats besides me
+            me = view.get("seat")
+            candidates = [s for s in self._alive(view) if s != me]
         partners = set(view.get("partners") or [])
-        safe = [s for s in legal if s not in partners]
-        return safe or legal
+        safe = [s for s in candidates if s not in partners]
+        return safe or candidates
 
     def _night(self, view: View, owe: str) -> Action | None:
         legal = self._legal(view)
@@ -81,13 +112,22 @@ class BaseBrain:
             return None
         partners = set(view.get("partners") or [])
         safe = [s for s in legal if s not in partners] or legal
-        return {"tool": "night_action", "args": {"target": self.rng.choice(safe)}}
+        return {"tool": "night_action",
+                "args": {"target": self.rng.choice(safe)},
+                "reason": f"night {owe}"}
 
     def _vote(self, view: View) -> Action | None:
         raise NotImplementedError
 
     def _post(self, view: View) -> Action | None:
         return None
+
+    def _suspect(self, view: View) -> int | None:
+        """The seat this brain most suspects, or None on an empty board."""
+        candidates = self._vote_candidates(view)
+        if not candidates:
+            return None
+        return most_accused(view, candidates, self.rng) or self.rng.choice(candidates)
 
 
 def most_accused(view: View, candidates: list[int], rng: random.Random) -> int | None:

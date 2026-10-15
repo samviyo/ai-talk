@@ -17,6 +17,14 @@ DEFAULT_PRICES = {
     "claude-opus-5-5": {"input": 4.0, "output": 20.0},
 }
 
+# Simulated cost per accepted action for a house-bot seat, by brain.
+DEFAULT_HOUSE_PRICES = {
+    "random": 0.002,
+    "quiet": 0.004,
+    "accuser": 0.012,
+    "baseline": 0.008,
+}
+
 
 class AppState:
     def __init__(
@@ -35,6 +43,8 @@ class AppState:
         auto_restart: bool = True,
         min_window_s: float = 0.0,
         transition_s: float = 0.0,
+        house_prices: dict[str, float] | None = None,
+        powerup_prices: dict[str, float] | None = None,
     ) -> None:
         self.config = config
         self.budget_usd = budget_usd
@@ -46,6 +56,12 @@ class AppState:
         self.token_index: dict[str, tuple[Table, int]] = {}
         self.teams_toml = teams_toml or {}
         self.default_key_env = default_key_env
+        self.house_prices = house_prices or dict(DEFAULT_HOUSE_PRICES)
+        from werewolf.engine import POWERUP_PRICES
+
+        self.powerup_prices = dict(POWERUP_PRICES)
+        if powerup_prices:
+            self.powerup_prices.update({k: float(v) for k, v in powerup_prices.items()})
         for t in range(n_tables):
             name = f"table{t + 1}"
             tokens = [

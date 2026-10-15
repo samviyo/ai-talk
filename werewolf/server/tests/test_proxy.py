@@ -170,10 +170,7 @@ async def test_fallback_random_when_all_broke(tmp_path: Path):
         # a kill must have happened on some night (all wolves broke -> random kill)
         night_results = [e for e in g.events(None) if e.kind == "night_result"]
         assert any(e.data["kill_target"] is not None for e in night_results)
-        # votes happened via random fallback
-        tallies = [e for e in g.events(None) if e.kind == "vote_tally"]
-        assert any(
-            any(b["target"] is not None for b in e.data["ballots"]) for e in tallies
-        )
+        # every seat is broke and silent: days end in vote_skipped
+        assert any(e.kind == "vote_skipped" for e in g.events(None))
     finally:
         await srv.stop()

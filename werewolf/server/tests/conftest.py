@@ -60,9 +60,11 @@ async def start_server(
     min_window_s: float = 0.0,
     transition_s: float = 0.0,
     transition_on_start: bool = True,
+    discussion_s: float = 1.0,
 ) -> RunningServer:
     config = Config(
-        seats=seats, wolves=2, discussion_rounds=2, max_days=5, seed=seed
+        seats=seats, wolves=2, max_days=5, seed=seed,
+        discussion_s=discussion_s, max_posts=3,
     )
     state = AppState(
         config=config,

@@ -268,6 +268,7 @@ class Game:
         if isinstance(action, SeerCheck):
             self._seer_checks[seat] = action.target
             self._emit_night_action(seat, "check", action.target)
+            self._maybe_close()
         elif isinstance(action, NightKill):
             self._ballots[seat] = action
             self._emit_night_action(seat, "kill", action.target)

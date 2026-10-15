@@ -219,8 +219,8 @@ async def test_window_deadline_starts_when_turn_changes(tmp_path: Path):
             assert table._clocked_turn == g.turn_id
             assert table.window_opened >= opened0
             assert table.game.phase == "day_discussion"
-            # the deadline for the new window is window_s after NOW, not stale
-            assert table.deadline() - table.window_opened == 60.0
+            # the deadline for the new window is discussion_s after NOW, not stale
+            assert table.deadline() - table.window_opened == table.config.discussion_s
     finally:
         await srv.stop()
 
@@ -238,14 +238,14 @@ async def test_get_my_role_does_not_reset_call_budget(tmp_path: Path):
         turn_id = table.public_turn_id()
         # burn 5 calls, call get_my_role, then confirm the counter did not reset
         for _ in range(5):
-            r = await mcp_call(srv.url, srv.token(seat), "read_board", {"since": 0})
+            r = await mcp_call(srv.url, srv.token(seat), "shop", {})
             assert "error" not in r, r
         r = await mcp_call(srv.url, srv.token(seat), "get_my_role", {})
         assert r["seat"] == seat
         for _ in range(5):
-            r = await mcp_call(srv.url, srv.token(seat), "read_board", {"since": 0})
+            r = await mcp_call(srv.url, srv.token(seat), "shop", {})
             assert "error" not in r, r
-        r = await mcp_call(srv.url, srv.token(seat), "read_board", {"since": 0})
+        r = await mcp_call(srv.url, srv.token(seat), "shop", {})
         assert r.get("error") == "call_budget_exceeded", r
     finally:
         await srv.stop()
@@ -280,8 +280,7 @@ async def test_readiness_barrier_holds_game(tmp_path: Path):
     from werewolf.engine import Config
 
     table = Table(
-        name="t", config=Config(seats=7, wolves=2, discussion_rounds=2,
-                                max_days=5, seed=40),
+        name="t", config=Config(seats=7, wolves=2, max_days=5, seed=40),
         budget_usd=0.5, window_s=0.3, runs_dir=tmp_path,
         tokens=[f"t{s}" for s in range(7)],
         teams=[f"team{s}" for s in range(7)],
@@ -334,8 +333,7 @@ async def test_min_window_dwell_delays_release(tmp_path: Path):
     from werewolf.engine import Config
 
     table = Table(
-        name="t", config=Config(seats=7, wolves=2, discussion_rounds=2,
-                                max_days=5, seed=50),
+        name="t", config=Config(seats=7, wolves=2, max_days=5, seed=50),
         budget_usd=0.5, window_s=60.0, runs_dir=tmp_path,
         tokens=[f"t{s}" for s in range(7)],
         teams=[f"team{s}" for s in range(7)],
@@ -357,8 +355,7 @@ async def test_transition_hold_and_pause(tmp_path: Path):
     from werewolf.engine import Config
 
     table = Table(
-        name="t", config=Config(seats=7, wolves=2, discussion_rounds=2,
-                                max_days=5, seed=51),
+        name="t", config=Config(seats=7, wolves=2, max_days=5, seed=51),
         budget_usd=0.5, window_s=60.0, runs_dir=tmp_path,
         tokens=[f"t{s}" for s in range(7)],
         teams=[f"team{s}" for s in range(7)],
@@ -449,20 +446,20 @@ async def test_transition_delays_night_after_vote(tmp_path: Path):
 
         def _saw() -> bool:
             return any(
-                p == "day_vote" and q == "night"
+                p in ("day_discussion", "day_vote", "defence") and q == "night"
                 for (p, _, _), (q, _, _) in zip(releases, releases[1:])
             )
 
         while not _saw() and table.game.result is None:
             await asyncio.sleep(0.2)
         bots.cancel()
-        nights_after_votes = [
+        day_to_night = [
             (t_prev, t)
             for (prev_ph, _, t_prev), (ph, _, t) in zip(releases, releases[1:])
-            if prev_ph == "day_vote" and ph == "night"
+            if prev_ph in ("day_discussion", "day_vote", "defence") and ph == "night"
         ]
-        assert nights_after_votes, f"never saw day_vote -> night: {releases}"
-        for t_prev, t in nights_after_votes:
+        assert day_to_night, f"never saw day -> night: {releases}"
+        for t_prev, t in day_to_night:
             assert t - t_prev >= 1.9, t - t_prev
     finally:
         await srv.stop()
@@ -545,8 +542,7 @@ async def test_no_fallback_during_large_transition(tmp_path: Path):
     from werewolf.engine import Config, NightKill
 
     table = Table(
-        name="t", config=Config(seats=7, wolves=2, discussion_rounds=2,
-                                max_days=5, seed=52),
+        name="t", config=Config(seats=7, wolves=2, max_days=5, seed=52),
         budget_usd=0.5, window_s=0.5, runs_dir=tmp_path,
         tokens=[f"t{s}" for s in range(7)],
         teams=[f"team{s}" for s in range(7)],

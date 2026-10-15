@@ -17,8 +17,8 @@ from .llm import Prices
 from .state import AppState, DEFAULT_PRICES as _FALLBACK_PRICES
 
 FORMATS = {
-    "practice": dict(seats=7, wolves=2, discussion_rounds=2, max_days=5),
-    "final": dict(seats=12, wolves=3, discussion_rounds=2, max_days=6),
+    "practice": dict(seats=7, wolves=2, max_days=5, discussion_s=60.0, max_posts=3),
+    "final": dict(seats=12, wolves=3, max_days=6, discussion_s=90.0, max_posts=3),
 }
 
 
@@ -32,6 +32,17 @@ def _load_prices() -> Prices:
     )
 
 
+def _load_shop() -> tuple[dict[str, float], dict[str, float]]:
+    """prices.toml [housebots] and [powerups]; empty when the file is absent."""
+    path = Path("prices.toml")
+    if not path.exists():
+        return {}, {}
+    raw = tomllib.loads(path.read_text())
+    house = {k: float(v) for k, v in raw.get("housebots", {}).items()}
+    powerups = {k: float(v) for k, v in raw.get("powerups", {}).items()}
+    return house, powerups
+
+
 def _load_teams() -> dict[str, str] | None:
     path = Path("teams.toml")
     if not path.exists():
@@ -42,13 +53,17 @@ def _load_teams() -> dict[str, str] | None:
 
 def build_state(args: argparse.Namespace) -> AppState:
     fmt = FORMATS[args.format]
+    discussion_s = getattr(args, "discussion_s", None) or fmt["discussion_s"]
+    max_posts = getattr(args, "max_posts", None) or fmt["max_posts"]
     config = Config(
         seats=args.seats or fmt["seats"],
         wolves=fmt["wolves"],
-        discussion_rounds=fmt["discussion_rounds"],
         max_days=fmt["max_days"],
         seed=args.seed,
+        discussion_s=discussion_s,
+        max_posts=max_posts,
     )
+    house_prices, powerup_prices = _load_shop()
     return AppState(
         config=config,
         n_tables=args.tables,
@@ -61,6 +76,8 @@ def build_state(args: argparse.Namespace) -> AppState:
         teams_toml=_load_teams(),
         min_window_s=args.min_window_s,
         transition_s=args.transition_s,
+        house_prices=house_prices or None,
+        powerup_prices=powerup_prices or None,
     )
 
 
@@ -134,10 +151,21 @@ def cmd_table(args: argparse.Namespace) -> int:
     async def _run() -> int:
         import json
 
+        import httpx
+
         token_file = args.token_file or str(Path(args.runs_dir) / "tokens.json")
-        tokens = json.loads(Path(token_file).read_text())["tables"][
-            f"table{args.table}"
-        ]
+        data = json.loads(Path(token_file).read_text())
+        tokens = data["tables"][f"table{args.table}"]
+        operator = data.get("operator")
+        # The server, never the client, owns which seats are house bots.
+        async with httpx.AsyncClient() as client:
+            resp = await client.post(
+                f"{args.server}/admin/house",
+                params={"op": operator},
+                json={str(i): brains[i] for i in range(len(brains))},
+                timeout=10,
+            )
+            resp.raise_for_status()
         tasks = [
             run_bot(args.server, tokens[i], brain, args.seed + i)
             for i, brain in enumerate(brains)
@@ -177,6 +205,8 @@ def main() -> int:
         p.add_argument("--transition-s", type=float, default=0.0)
         p.add_argument("--runs-dir", default="runs")
         p.add_argument("--fake-llm", action="store_true")
+        p.add_argument("--discussion-s", type=float, default=None)
+        p.add_argument("--max-posts", type=int, default=None)
 
     p_serve = sub.add_parser("serve")
     common(p_serve)

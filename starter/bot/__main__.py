@@ -33,6 +33,66 @@ async def _call(session: ClientSession, tool: str, args: dict) -> dict | str:
         return text
 
 
+async def _maybe_buy_vote(session: ClientSession, turn: dict) -> None:
+    """Example purchase rule: buy a double vote once if we can afford it."""
+    shop = await _call(session, "shop", {})
+    if not isinstance(shop, dict):
+        return
+    for item in shop.get("items", []):
+        if item.get("item") == "double_vote" and item.get("available"):
+            await _call(session, "buy", {"turn_id": turn["turn_id"], "item": "double_vote"})
+            return
+
+
+async def _discuss(session: ClientSession, llm, config: BotConfig,
+                   my_role: str, turn: dict) -> None:
+    """Live-chat loop: one opener, then reply to mentions while posts remain."""
+    turn_id = turn["turn_id"]
+    cursor = int(turn.get("board_cursor") or 0)
+    deadline_s = float(turn.get("deadline_s") or 0)
+    started = asyncio.get_event_loop().time()
+    opened = False
+    reserve = 1
+    while True:
+        left = deadline_s - (asyncio.get_event_loop().time() - started)
+        if left <= 1.0 or llm.broke:
+            return
+        board = await _call(session, "read_board", {"since": cursor})
+        if not isinstance(board, dict) or "error" in board:
+            await asyncio.sleep(1.05)
+            continue
+        posts = board.get("posts", [])
+        if posts:
+            cursor = max(cursor, max(p["id"] for p in posts) + 1)
+        posts_left = int(board.get("posts_left", 0))
+        mentions = turn.get("mentions") or []
+        want = None
+        if not opened and posts_left > reserve:
+            want = "opener"
+        elif mentions and posts_left > 0:
+            want = "reply"
+        if want:
+            prompt = decide_prompt(
+                "day_discussion", "post", my_role, posts, [],
+                _format_announcements(turn.get("announcements", [])),
+            )
+            reply = llm.complete(
+                config.decide_model, prompt, timeout_s=max(1.0, left - 3.0)
+            )
+            if llm.broke:
+                return
+            chat = reply[:280] or "No comment."
+            out = await _call(session, "post", {"turn_id": turn_id, "chat": chat})
+            if isinstance(out, dict) and not out.get("error"):
+                opened = True
+        turn = await _call(session, "wait_for_turn", {"timeout_s": 3})
+        if not isinstance(turn, dict) or turn.get("status") == "over":
+            return
+        if turn.get("phase") not in (None, "day_discussion"):
+            return
+        await asyncio.sleep(1.05)
+
+
 def _format_announcements(announcements: list) -> list[str]:
     """Structured announcement dicts -> one-line text for the prompt."""
     out = []
@@ -85,12 +145,16 @@ async def play(server: str, token: str, config: BotConfig) -> None:
                     if turn.get("status") == "over":
                         print(f"game over: {turn.get('result')}", file=sys.stderr)
                         return
-                    if turn.get("status") == "waiting":
+                    if turn.get("status") in ("waiting", "idle"):
                         continue
 
                     obligation = turn.get("you_owe")
                     turn_id = turn["turn_id"]
                     legal = turn.get("legal_targets", [])
+
+                    if obligation == "discuss":
+                        await _discuss(session, llm, config, my_role, turn)
+                        continue
 
                     board = await _call(session, "read_board", {"since": 0})
                     posts = board.get("posts", []) if isinstance(board, dict) else []
@@ -106,10 +170,11 @@ async def play(server: str, token: str, config: BotConfig) -> None:
                         print("broke: stopping LLM calls", file=sys.stderr)
                         return
 
-                    if obligation == "post":
-                        chat = reply[:280] or "No comment."
+                    if obligation == "defence":
+                        chat = reply[:280] or "I am innocent."
                         out = await _call(session, "post", {"turn_id": turn_id, "chat": chat})
                     elif obligation == "vote":
+                        await _maybe_buy_vote(session, turn)
                         target = parse_target(reply, legal)
                         if target is None:
                             continue  # abstain rather than vote illegally
