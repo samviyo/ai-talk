@@ -214,14 +214,17 @@ spectator sees every purchase as it happens. The leak test covers `powerup` and
 - One in-flight call per seat; a second concurrent call returns 409. So the only
   overshoot is one call, bounded by `max_tokens`.
 - Forwards to `${BIFROST_BASE_URL}/v1/chat/completions` with the team's virtual key.
-  `BIFROST_BASE_URL` comes from the environment, with no default to prod.
+  `BIFROST_BASE_URL` is the bare gateway origin (no `/v1`) from the environment, with
+  no default to prod — the server, and only the server, owns the `/v1` suffix.
 - Charge = usage × price. If usage is missing, charge input as chars/4 plus `max_tokens`
   of output. If the upstream call errors or times out (60s), charge the input estimate.
   Nothing is ever free by accident.
 - Upstream auth sends the key as both `Authorization: Bearer` and `x-bf-vk`. The developer
   gateway (`https://developer-gateway.services.clovesoftware-dev.com`) accepts
   `/v1/chat/completions` with a personal key and returns OpenAI usage, so dogfooding can use
-  it before team keys exist. Seed `prices.toml` from the gateway's published model costs.
+  it before team keys exist. `scripts/gateway-env.sh` exports that origin as
+  `BIFROST_BASE_URL` (no `/v1`); direct callers like the connect4 bots append `/v1`
+  themselves. Seed `prices.toml` from the gateway's published model costs.
 - `teams.toml`: `[teams.<name>] bifrost_key_env = "..."`. Keys live in env vars of the
   server process only.
 - `--fake-llm` mode returns canned completions with synthetic usage, for tests and dry
@@ -265,7 +268,8 @@ cmd = "uv run bot"                     # run inside the checkout
 - Engine (7×6), a solver (negamax with alpha-beta; depth-limited is fine), puzzle sets
   `win_in_1` and `block_in_1` generated from the solver.
 - `bots/naive.py`: one LLM call per move through Bifrost (direct, env
-  `BIFROST_BASE_URL` + `BIFROST_API_KEY`, OpenAI-compatible), prompt-only.
+  `BIFROST_BASE_URL` + `BIFROST_API_KEY`, OpenAI-compatible; the bot appends `/v1`
+  to the bare origin itself), prompt-only.
 - `make eval-c4` runs the checks in the talk doc and prints a scoreboard, including the
   always-column-0 negative control.
 - `tournament.py`: round-robin between bot modules.

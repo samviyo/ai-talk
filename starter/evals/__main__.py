@@ -19,28 +19,66 @@ class Row:
     gate: bool = True
 
 
-def evaluate(runs_dir: Path, thresholds: dict) -> list[Row]:
-    games = list(iter_games(runs_dir))
+def _seats_for(log, seat: int | None, team: str | None) -> set[int] | None:
+    """Resolve which seats to score. None means all seats (table-wide)."""
+    if seat is not None:
+        return {seat}
+    if team is not None:
+        # game.json seats may carry a team label per seat; fall back to non-house.
+        teamed = _team_seats(log, team)
+        if teamed:
+            return teamed
+    if log.house:
+        return set(log.roles) - set(log.house)
+    return None
+
+
+def _team_seats(log, team: str) -> set[int]:
+    """Seats whose game.json team label matches; empty if no team data recorded."""
+    return {s for s, t in log.teams.items() if t == team}
+
+
+def evaluate(runs_dir: Path, thresholds: dict, seat: int | None = None,
+             team: str | None = None, latest: int | None = None) -> list[Row]:
+    games = list(iter_games(runs_dir, latest=latest))
     rows: list[Row] = []
     if not games:
         return [Row("games found", False, f"none under {runs_dir}")]
 
+    # Resolve the seat scope once per game; warn if scoring table-wide by default.
+    scopes: list[set[int] | None] = []
+    for _, _, log in games:
+        scope = _seats_for(log, seat, team)
+        scopes.append(scope)
+
+    scoped = seat is not None or team is not None
+    if not scoped and any(s is not None for s in scopes):
+        scope_label = "non-house seats"
+    elif not scoped:
+        scope_label = "all seats (no house data — table-wide)"
+        print(
+            "warning: game.json has no 'house' key; scoring all seats, house bots "
+            "included. Pass --seat N or --team NAME to scope to your bot.",
+            file=sys.stderr,
+        )
+    else:
+        scope_label = f"seat {seat}" if seat is not None else f"team {team}"
+
     # Protocol errors, aggregated over all games.
-    total_err = sum(
-        0 if checks.protocol_errors(t, thresholds["max_protocol_errors"]).ok else 1
-        for _, t, _ in games
-    )
+    def proto(t, s):
+        return checks.protocol_errors(t, thresholds["max_protocol_errors"], seats=s).ok
+
+    total_err = sum(0 if proto(t, s) else 1 for (_, t, _), s in zip(games, scopes))
     rows.append(Row(
         "protocol errors",
-        all(checks.protocol_errors(t, thresholds["max_protocol_errors"]).ok
-            for _, t, _ in games),
+        all(proto(t, s) for (_, t, _), s in zip(games, scopes)),
         f"{total_err}/{len(games)} games over the limit",
     ))
 
     # Reads board before voting.
     fracs = []
-    for _, traces, log in games:
-        r = checks.reads_board_before_vote(traces, 0.0, log)
+    for (_, traces, log), s in zip(games, scopes):
+        r = checks.reads_board_before_vote(traces, 0.0, log, seats=s)
         if r.detail != "no votes":
             n, d = r.detail.split(" votes")[0].split("/")
             fracs.append(int(n) / int(d))
@@ -53,8 +91,8 @@ def evaluate(runs_dir: Path, thresholds: dict) -> list[Row]:
 
     # Role secrecy.
     violations = sum(
-        0 if checks.role_secrecy(log, thresholds["max_role_secrecy_violations"]).ok else 1
-        for _, _, log in games
+        0 if checks.role_secrecy(log, thresholds["max_role_secrecy_violations"], seats=s).ok else 1
+        for (_, _, log), s in zip(games, scopes)
     )
     rows.append(Row(
         "role secrecy",
@@ -64,8 +102,8 @@ def evaluate(runs_dir: Path, thresholds: dict) -> list[Row]:
 
     # Claim consistency.
     inconsistent = sum(
-        0 if checks.claim_consistency(log, thresholds["max_claim_inconsistencies"]).ok else 1
-        for _, _, log in games
+        0 if checks.claim_consistency(log, thresholds["max_claim_inconsistencies"], seats=s).ok else 1
+        for (_, _, log), s in zip(games, scopes)
     )
     rows.append(Row(
         "claim consistency",
@@ -75,8 +113,8 @@ def evaluate(runs_dir: Path, thresholds: dict) -> list[Row]:
 
     # Vote accuracy vs the random baseline.
     hits = total = 0
-    for _, _, log in games:
-        h, t = checks.vote_accuracy(log)
+    for (_, _, log), s in zip(games, scopes):
+        h, t = checks.vote_accuracy(log, seats=s)
         hits += h
         total += t
     enough = len(games) >= thresholds["min_vote_accuracy_games"]
@@ -91,8 +129,8 @@ def evaluate(runs_dir: Path, thresholds: dict) -> list[Row]:
 
     # Seer follow-through.
     dealt = identified = 0
-    for _, _, log in games:
-        d, i = checks.seer_follow_through(log)
+    for (_, _, log), s in zip(games, scopes):
+        d, i = checks.seer_follow_through(log, seats=s)
         dealt += d
         identified += i
     ft = dealt / identified if identified else 1.0
@@ -105,7 +143,8 @@ def evaluate(runs_dir: Path, thresholds: dict) -> list[Row]:
 
     # Budget: nobody broke.
     broke_games = sum(
-        0 if checks.budget_never_broke(log).ok else 1 for _, _, log in games
+        0 if checks.budget_never_broke(log, seats=s).ok else 1
+        for (_, _, log), s in zip(games, scopes)
     )
     rows.append(Row(
         "budget never broke",
@@ -115,8 +154,10 @@ def evaluate(runs_dir: Path, thresholds: dict) -> list[Row]:
 
     # Win rate by role — informational until enough games.
     wins_by_role: dict[str, list[int]] = {}
-    for _, _, log in games:
-        for seat, role in log.roles.items():
+    for (_, _, log), s in zip(games, scopes):
+        for seat_i, role in log.roles.items():
+            if s is not None and seat_i not in s:
+                continue
             side = "wolves" if role == "werewolf" else "village"
             won = int(log.result == side)
             wins_by_role.setdefault(role, []).append(won)
@@ -130,6 +171,7 @@ def evaluate(runs_dir: Path, thresholds: dict) -> list[Row]:
         detail + ("" if enough_wr else " (informational)"),
         gate=False,
     ))
+    rows.append(Row("scored seats", True, scope_label, gate=False))
     return rows
 
 
@@ -155,9 +197,16 @@ def main() -> None:
         type=Path,
         default=Path(__file__).parent / "thresholds.toml",
     )
+    ap.add_argument("--seat", type=int, default=None,
+                    help="score only this seat")
+    ap.add_argument("--team", type=str, default=None,
+                    help="score seats whose game.json team label matches")
+    ap.add_argument("--latest", type=int, default=None, metavar="N",
+                    help="score only the N most recently modified games")
     args = ap.parse_args()
     thresholds = tomllib.loads(args.thresholds.read_text())
-    rows = evaluate(args.runs, thresholds)
+    rows = evaluate(args.runs, thresholds, seat=args.seat, team=args.team,
+                    latest=args.latest)
     print(f"\nScoreboard over {args.runs}:\n")
     sys.exit(print_scoreboard(rows))
 

@@ -98,7 +98,10 @@ async def play(server: str, token: str, config: BotConfig) -> None:
                         turn["phase"], obligation, my_role, posts, legal,
                         _format_announcements(turn.get("announcements", [])),
                     )
-                    reply = llm.complete(config.decide_model, prompt)
+                    # Bound the LLM call below the window deadline or we abstain the turn.
+                    deadline = turn.get("deadline_s")
+                    timeout_s = max(1.0, float(deadline) - 3.0) if deadline else None
+                    reply = llm.complete(config.decide_model, prompt, timeout_s=timeout_s)
                     if llm.broke:
                         print("broke: stopping LLM calls", file=sys.stderr)
                         return

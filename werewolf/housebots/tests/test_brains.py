@@ -159,6 +159,25 @@ def test_accuser_never_accuses_partner() -> None:
 
 # -- baseline claims tracking ------------------------------------------------
 
+def test_baseline_wolf_counterclaim_never_names_partner() -> None:
+    # Force the counterclaim to fire and confirm the fake-seer target is never a partner.
+    import werewolf.housebots.brains as B
+
+    old = B.BaselineBrain.COUNTERCLAIM_CHANCE
+    B.BaselineBrain.COUNTERCLAIM_CHANCE = 1.0
+    try:
+        for seed in range(30):
+            brain = make_brain("baseline", seed=seed)
+            view = make_view(seat=1, role="werewolf", partners=[4], you_owe="post",
+                             legal_targets=[0, 2, 4, 5])
+            post = brain.decide(view)
+            assert post is not None
+            assert post["args"]["claimed_role"] == "seer"
+            assert "4 werewolf" not in post["args"]["chat"]
+    finally:
+        B.BaselineBrain.COUNTERCLAIM_CHANCE = old
+
+
 def test_baseline_seer_claims_checks_truthfully() -> None:
     brain = make_brain("baseline", seed=4)
     checks = {2: "werewolf", 5: "villager"}

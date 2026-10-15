@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import tomllib
 from dataclasses import dataclass
 from pathlib import Path
@@ -45,17 +46,19 @@ class LLMClient:
     """OpenAI SDK wrapper pointed at the server's LLM proxy."""
 
     def __init__(self, server: str, token: str, config: BotConfig):
-        self._client = OpenAI(base_url=f"{server}/llm/v1", api_key=token)
+        # No retries: a retry can outlive the 20s window and miss the whole turn.
+        self._client = OpenAI(base_url=f"{server}/llm/v1", api_key=token, max_retries=0)
         self._config = config
         self.broke = False
 
-    def complete(self, model: str, prompt: str) -> str:
+    def complete(self, model: str, prompt: str, timeout_s: float | None = None) -> str:
         if self.broke:
             return ""
         try:
             resp = self._client.chat.completions.create(
                 model=model,
                 max_tokens=self._config.max_tokens,
+                timeout=timeout_s,
                 messages=[
                     {"role": "system", "content": _SYSTEM},
                     {"role": "user", "content": prompt},
@@ -67,7 +70,15 @@ class LLMClient:
                 self.broke = True
             return ""
         choice = resp.choices[0].message.content or ""
-        return choice.strip()
+        return strip_artifacts(choice.strip())
+
+
+_TOOL_ARTIFACT = re.compile(r"<invoke[^>]*>.*?</invoke>|<[^>]*invoke[^>]*>", re.S)
+
+
+def strip_artifacts(text: str) -> str:
+    """Remove leaked tool-call markup a model sometimes emits instead of prose."""
+    return _TOOL_ARTIFACT.sub("", text).strip()
 
 
 def decide_prompt(phase: str, obligation: str, role: str, board: list[dict],

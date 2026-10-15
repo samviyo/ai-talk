@@ -59,6 +59,36 @@ def run(decide_fn, puzzles_dir: Path = PUZZLES_DIR) -> tuple[int, int]:
     return correct, len(puzzles)
 
 
+def _direct_decide(model: str):
+    """Call the gateway directly (maintainer path) with BIFROST_BASE_URL/_API_KEY."""
+    import os
+
+    from openai import OpenAI
+
+    client = OpenAI(
+        base_url=os.environ["BIFROST_BASE_URL"].rstrip("/") + "/v1",
+        api_key=os.environ["BIFROST_API_KEY"],
+        max_retries=0,
+    )
+
+    def decide(prompt: str) -> str:
+        resp = client.chat.completions.create(
+            model=model,
+            max_tokens=1024,
+            temperature=0,  # puzzles must be deterministic to be a stable signal
+            messages=[{"role": "user", "content": prompt}],
+        )
+        return (resp.choices[0].message.content or "").strip()
+
+    return decide
+
+
+def _fake_decide(prompt: str) -> str:
+    """Offline canned answer: name the first seat a puzzle expects, for tests."""
+    seats = re.findall(r"\b\d+\b", prompt)
+    return json.dumps({"seats": [int(seats[-1])]}) if seats else '{"seats": []}'
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description="Score deduction puzzles")
     ap.add_argument(
@@ -67,9 +97,21 @@ def main() -> None:
         help="module exposing decide(prompt) -> str",
     )
     ap.add_argument("--puzzles", type=Path, default=PUZZLES_DIR)
+    ap.add_argument("--direct", action="store_true",
+                    help="call the gateway directly via BIFROST_BASE_URL/_API_KEY")
+    ap.add_argument("--model", default="claude-haiku-5-5",
+                    help="model for --direct (match the bot's decide model)")
+    ap.add_argument("--fake", action="store_true",
+                    help="offline canned answers, for harness tests")
     args = ap.parse_args()
-    mod = importlib.import_module(args.module)
-    correct, total = run(mod.decide, args.puzzles)
+    if args.fake:
+        decide_fn = _fake_decide
+    elif args.direct:
+        decide_fn = _direct_decide(args.model)
+    else:
+        mod = importlib.import_module(args.module)
+        decide_fn = mod.decide
+    correct, total = run(decide_fn, args.puzzles)
     print(f"\n{correct}/{total} puzzles correct")
     sys.exit(0 if total and correct == total else 1)
 
