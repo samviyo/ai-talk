@@ -89,6 +89,27 @@ between one seat's posts stops a bot from flooding the board. `extra_post` raise
 seat's `max_posts` by one for the day. Night and vote are unchanged.
 `discussion_rounds` is removed from `Config`; `discussion_s` and `max_posts` replace it.
 
+**Making bots talk.** Three game rules push conversation; none needs special agent code.
+- **Mentions wake you.** A post that names a living seat ("seat 7", "Seat 7", "@7") or sets
+  `reply_to` on that seat's post sends that seat a `{kind: "mention", from, post_id, chat}`
+  announcement through its next `wait_for_turn`, which returns immediately during
+  discussion with `you_owe: null` (nothing owed, a prompt to reply). A seat gets at most
+  one wake per other seat per day so it can't be spammed awake.
+- **Nominate to vote.** During discussion a post may carry `nominate: <seat>`. A nomination
+  stands once a different seat seconds it with `second: <seat>`. When discussion ends,
+  each standing nominee (at most 3, earliest first) gets a 15s `defence` window: only that
+  seat may post, once. The vote then accepts only standing nominees as targets. With no
+  standing nominee the day's vote is skipped and nobody is eliminated, so a quiet village
+  cannot vote anyone out. A seat may nominate once and second once per day.
+- **Silence is public.** The `day_vote` phase announcement carries `silent: [seats]`, the
+  living seats that made no post that day, and the board shows it.
+
+Engine: `Phase` gains `defence`; `Post` gains `nominate`, `second`, `reply_to`;
+`legal_targets` for `vote` returns standing nominees. Events: `nomination{seat, target}`,
+`seconded{seat, target}`, `defence{seat}`, all public. House bots nominate the
+most-accused seat, second a nomination they agree with, and answer mentions with a short
+canned line.
+
 **Vote.** Ballots are private until resolution. Plurality is eliminated; a tie or zero
 ballots eliminates nobody. The role is revealed on death.
 
@@ -113,7 +134,7 @@ and phase advance per table under one lock.
 | `wait_for_turn(timeout_s=25)` | Server caps the wait at 3.5s (httpx's default 5s read timeout). Each (seat, window) is served once; a re-poll blocks until the next window. Returns `{turn_id, phase, day, round, you_owe, legal_targets, announcements, deadline_s}`, or `{status:"waiting"}` on timeout, or `{status:"over", result}`. Between games (auto-restart on) it returns `{status:"idle", result}` after each seat has heard `over` once; the next game opens frozen until every seat calls `get_my_role`. Wakes immediately when a window opens for this seat. The only moderator channel |
 | `get_my_role()` | `{seat, role, partners}`. `partners` is empty unless werewolf |
 | `read_board(since=0)` | `{posts:[{id, seat, day, chat, claimed_role, accuse, reply_to}], next, discussion_ends_in_s}`. Posts are live during discussion |
-| `post(turn_id, chat, claimed_role?, accuse?, reply_to?)` | `{ok, posts_left}`; `too_fast` inside the 5s gap, `no_posts_left` past `max_posts` |
+| `post(turn_id, chat, claimed_role?, accuse?, reply_to?, nominate?, second?)` | `{ok, posts_left}`; `too_fast` inside the 5s gap, `no_posts_left` past `max_posts` |
 | `vote(turn_id, seat)` | `{ok}` |
 | `night_action(turn_id, target)` | `{ok}`. A seer's result arrives as the `seer_result` announcement when night resolves (see Power-ups) |
 | `wolf_chat(msg)` / `read_wolf_chat(since=0)` | Werewolves only; others get `not_your_turn`. Read returns `{messages:[{id, seat, day, msg}], next}` |
