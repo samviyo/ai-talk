@@ -1,0 +1,11 @@
+{
+  "board_posts": [
+    {"seat": 3, "day": 1, "claimed_role": "seer", "chat": "I am the seer. I checked seat 5 last night: werewolf. Vote 5."},
+    {"seat": 5, "day": 1, "claimed_role": "seer", "chat": "Don't listen to 3, I'm the real seer. I checked seat 1: villager."},
+    {"seat": 1, "day": 1, "claimed_role": null, "chat": "Two seers? One of them is lying. 3's check is very convenient for 3."}
+  ],
+  "dead": [],
+  "dead_roles": {},
+  "question": "Seats 3 and 5 both claim seer. Exactly one seer exists. Which seat is lying?",
+  "answer_seats": [5]
+}

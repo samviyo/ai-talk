@@ -1,0 +1,11 @@
+{
+  "board_posts": [
+    {"seat": 3, "day": 3, "claimed_role": null, "chat": "Seat 6 was just revealed as a werewolf. Look back: who defended 6 on days 1 and 2 and voted with 6 both times? Seat 1."},
+    {"seat": 1, "day": 3, "claimed_role": null, "chat": "Coincidence. I vote my conscience."},
+    {"seat": 4, "day": 3, "claimed_role": null, "chat": "Seat 1 also never posted until today. Classic quiet wolf riding a partner's bus."}
+  ],
+  "dead": [6, 2],
+  "dead_roles": {"6": "werewolf", "2": "villager"},
+  "question": "Seat 6 is a confirmed wolf. Which living seat is the most likely remaining wolf based on voting alignment?",
+  "answer_seats": [1]
+}
