@@ -33,6 +33,8 @@ class AppState:
         default_key_env: str = "BIFROST_API_KEY",
         upstream_transport: Any = None,
         auto_restart: bool = True,
+        min_window_s: float = 0.0,
+        transition_s: float = 0.0,
     ) -> None:
         self.config = config
         self.budget_usd = budget_usd
@@ -64,6 +66,8 @@ class AppState:
                 tokens=tokens,
                 teams=teams,
                 auto_restart=auto_restart,
+                min_window_s=min_window_s,
+                transition_s=transition_s,
             )
             self.tables.append(table)
             for s, tok in enumerate(tokens):

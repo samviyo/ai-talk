@@ -13,6 +13,21 @@ import httpx
 
 MAX_OUTPUT_TOKENS = 2048
 UPSTREAM_TIMEOUT_S = 60.0
+# Billing-routing fields (e.g. Bifrost `fallbacks`) are not forwarded.
+ALLOWED_FIELDS = frozenset(
+    {
+        "messages",
+        "model",
+        "max_tokens",
+        "temperature",
+        "top_p",
+        "stop",
+        "response_format",
+        "seed",
+        "tools",
+        "tool_choice",
+    }
+)
 
 
 @dataclass(frozen=True)
@@ -37,6 +52,10 @@ class Prices:
         return (
             prompt_tokens * self.input[model] + completion_tokens * self.output[model]
         ) / 1_000_000
+
+    def max_cost(self, prompt_tokens: int, completion_tokens: int) -> float:
+        # Conservative bound: the priciest known model.
+        return max(self.cost(m, prompt_tokens, completion_tokens) for m in self.input)
 
 
 class LLMProxy:
@@ -75,11 +94,12 @@ class LLMProxy:
             usd = self.prices.cost(model, usage["prompt_tokens"], usage["completion_tokens"])
             return 200, body, {"usd": usd}
         headers = {"Authorization": f"Bearer {api_key}", "x-bf-vk": api_key}
+        forwarded = {k: v for k, v in payload.items() if k in ALLOWED_FIELDS}
         try:
             async with self._client() as client:
                 resp = await client.post(
                     f"{self.base_url}/v1/chat/completions",
-                    json={**payload, "stream": False},
+                    json={**forwarded, "stream": False},
                     headers=headers,
                 )
             body = resp.json()
@@ -89,10 +109,19 @@ class LLMProxy:
         if resp.status_code != 200:
             return resp.status_code, body, {"usd": self.prices.cost(model, input_est, 0)}
         usage = body.get("usage") or {}
-        if usage.get("prompt_tokens") is not None and usage.get("completion_tokens") is not None:
-            usd = self.prices.cost(model, usage["prompt_tokens"], usage["completion_tokens"])
+        prompt_toks = usage.get("prompt_tokens")
+        completion_toks = usage.get("completion_tokens")
+        if prompt_toks is None or completion_toks is None:
+            prompt_toks, completion_toks = input_est, max_tokens
+        served = body.get("model")
+        if isinstance(served, str) and served != model:
+            # Bill at the served model's price; unknown models bill at the max.
+            if self.prices.allowed(served):
+                usd = self.prices.cost(served, prompt_toks, completion_toks)
+            else:
+                usd = self.prices.max_cost(prompt_toks, completion_toks)
         else:
-            usd = self.prices.cost(model, input_est, max_tokens)
+            usd = self.prices.cost(model, prompt_toks, completion_toks)
         return 200, body, {"usd": usd}
 
     def _validate(self, payload: dict[str, Any]) -> tuple[int, str, str] | None:

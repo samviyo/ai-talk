@@ -78,12 +78,19 @@ class Dispatcher:
         key = (table.name, seat)
         if tool == "wait_for_turn":
             return None
+        # Reset the counter only when the window changed; get_my_role must not.
         turn_id, count = self.calls.get(key, (g.turn_id, 0))
         if turn_id != g.turn_id:
             turn_id, count = g.turn_id, 0
         if count >= TOOL_CALL_BUDGET:
             return _err("call_budget_exceeded")
         self.calls[key] = (turn_id, count + 1)
+        return None
+
+    @staticmethod
+    def _gate_err(table: Table) -> CallToolResult | None:
+        if table.frozen or table.holding():
+            return _err("not_your_turn", "window not open yet")
         return None
 
     async def dispatch(
@@ -123,11 +130,14 @@ class Dispatcher:
                 table.ready_seats.add(seat)
                 if len(table.ready_seats) == table.config.seats:
                     table.ready_event.set()
-                self._budget_check_reset(table, seat)
                 return self._role(table, seat)
             if over and name in ("post", "vote", "night_action", "wolf_chat"):
                 return _err("not_your_turn", "game over")
             if not over:
+                if name in ("post", "vote", "night_action"):
+                    gate = self._gate_err(table)
+                    if gate is not None:
+                        return gate
                 budget_err = self._budget_check(table, seat, name)
                 if budget_err is not None:
                     return budget_err
@@ -135,6 +145,7 @@ class Dispatcher:
             if handler is None:
                 return _err("bad_schema", f"unknown tool {name}")
             result = handler(table, seat, args)
+            table.note_window_locked()
             if table.game.result is not None and not table._run_written:
                 table._run_written = True
                 table.write_run()
@@ -155,15 +166,19 @@ class Dispatcher:
                 g = table.game
                 table._notify_sse_locked()
                 if g.result is not None:
-                    self._budget_check_reset(table, seat)
                     return {"status": "over", "result": g.result}
                 owe = g.pending().get(seat)
                 # Serve each window once per seat; re-polls wait for the next.
-                if owe is not None and table._served_turn.get(seat) != g.turn_id:
+                if (
+                    owe is not None
+                    and not table.frozen
+                    and not table.holding()
+                    and table._served_turn.get(seat) != g.turn_id
+                ):
                     table._served_turn[seat] = g.turn_id
                     announcements = table.announcements_locked(seat)
                     return {
-                        "turn_id": g.turn_id,
+                        "turn_id": table.public_turn_id(),
                         "phase": g.phase,
                         "day": g.day,
                         "round": g.round,
@@ -172,16 +187,22 @@ class Dispatcher:
                         "announcements": announcements,
                         "deadline_s": round(table.deadline() - time.monotonic(), 2),
                     }
-                remaining = deadline - time.monotonic()
+                now = time.monotonic()
+                remaining = deadline - now
+                if table.frozen:
+                    # No release is scheduled; only a notify (unfreeze) ends this.
+                    remaining = max(0.01, remaining)
+                elif table.holding():
+                    # Wake at release even if the caller's wait budget is longer.
+                    remaining = max(0.01, min(remaining, table.release_at() - now + 0.01))
                 if remaining <= 0:
                     return {"status": "waiting"}
                 try:
                     await asyncio.wait_for(table.cond.wait(), timeout=remaining)
                 except TimeoutError:
+                    if table.holding() or time.monotonic() < deadline:
+                        continue  # re-check after a hold boundary
                     return {"status": "waiting"}
-
-    def _budget_check_reset(self, table: Table, seat: int) -> None:
-        self.calls[(table.name, seat)] = (table.game.turn_id, 0)
 
     def _role(self, table: Table, seat: int) -> dict[str, Any]:
         g = table.game
@@ -299,8 +320,11 @@ class Dispatcher:
         }
 
     def _check_turn_id(self, table: Table, args: dict) -> CallToolResult | None:
-        if args.get("turn_id") != table.game.turn_id:
-            return _err("stale_turn", f"current turn is {table.game.turn_id}")
+        # The raw engine id is also accepted for one game back of compatibility.
+        current = table.public_turn_id()
+        offered = args.get("turn_id")
+        if offered != current and offered != table.game.turn_id:
+            return _err("stale_turn", f"current turn is {current}")
         return None
 
 

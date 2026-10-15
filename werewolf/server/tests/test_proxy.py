@@ -144,6 +144,8 @@ async def test_funded_wolf_decides_kill(tmp_path: Path):
         assert r.get("ok") is True
         # now let the clock fire: broke wolf must abstain, kill still lands
         async with table.cond:
+            table._released_at -= 120.0
+            table._transition_until = 0.0
             table.window_opened -= 120.0
             await table.check_clock_locked()
         night = [e for e in table.game.events(None) if e.kind == "night_result"][-1]
