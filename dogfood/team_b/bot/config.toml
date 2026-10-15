@@ -1,0 +1,5 @@
+# Model choices. Only models in the server's prices.toml are accepted.
+# Team B: haiku reads/summarises the board, sonnet makes decisions.
+read_board_model = "claude-haiku-5-5"
+decide_model = "claude-sonnet-5-5"
+max_tokens = 1024
