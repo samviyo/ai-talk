@@ -55,7 +55,9 @@ def _install(dest: Path) -> None:
         subprocess.run(["uv", "sync"], cwd=dest, check=True)
 
 
-async def run_final(toml_path: Path, check: bool, port: int, budget_usd: float) -> int:
+async def run_final(
+    toml_path: Path, check: bool, port: int, budget_usd: float, linger: bool = True
+) -> int:
     seats_n, seed, teams = load_final(toml_path)
     if not teams:
         raise SystemExit("final.toml has no [[teams]]")
@@ -108,6 +110,7 @@ async def run_final(toml_path: Path, check: bool, port: int, budget_usd: float) 
     serve_task = asyncio.create_task(server.serve())
     await asyncio.sleep(1.0)
     url = f"http://127.0.0.1:{port}"
+    print(f"[final] spectator: {url}/?op={state.operator_token}", flush=True)
 
     if check:
         # smoke-start every bot against the running server, then exit
@@ -197,6 +200,11 @@ async def run_final(toml_path: Path, check: bool, port: int, budget_usd: float) 
             p.terminate()
     for w in watchers:
         w.cancel()
+    if linger:
+        # Keep the projector on the final board until the operator stops it.
+        print("[final] game over; spectator stays up, Ctrl-C to exit", flush=True)
+        await serve_task
+        return 0
     server.should_exit = True
     await asyncio.wait_for(serve_task, timeout=5.0)
     return 0

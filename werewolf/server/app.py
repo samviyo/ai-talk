@@ -28,21 +28,6 @@ def _op_ok(request: Request, state: AppState) -> bool:
     return request.query_params.get("op") == state.operator_token
 
 
-def _seat_info(table) -> list[dict[str, Any]]:
-    g = table.game
-    return [
-        {
-            "seat": s,
-            "team": table.seats[s].team,
-            "role": g.role(s),
-            "alive": s in g.alive(),
-            "broke": table.is_broke(s),
-            "spend": table.seats[s].spent_usd,
-        }
-        for s in range(g.config.seats)
-    ]
-
-
 def create_app(state: AppState) -> Starlette:
     mcp_server = build_mcp_server(state)
     manager = StreamableHTTPSessionManager(app=mcp_server, json_response=True)
@@ -67,27 +52,18 @@ def create_app(state: AppState) -> Starlette:
             return JSONResponse({"error": "forbidden"}, status_code=403)
         table = state.tables[0]
         queue: asyncio.Queue = asyncio.Queue()
-        table.sse_subs.append(queue)
 
         async def stream():
             try:
-                yield "data: " + json.dumps(
-                    {
-                        "kind": "init",
-                        "seats": table.config.seats,
-                        "game": table.game_counter,
-                        "seat_info": _seat_info(table),
-                    }
-                ) + "\n\n"
-                spend = table.spend_snapshot()
-                yield "data: " + json.dumps(
-                    {
-                        "kind": "spend",
-                        "seats": [
-                            {"seat": s, **v} for s, v in spend.items()
-                        ],
-                    }
-                ) + "\n\n"
+                async with table.lock:
+                    table._notify_sse_locked()  # flush so history and queue never overlap
+                    table.sse_subs.append(queue)
+                    init, tick = table.spectator_init(), table.spectator_tick()
+                    history = [{"kind": "event", **e.to_dict()} for e in table.game.events(None)]
+                yield "data: " + json.dumps(init) + "\n\n"
+                for m in history:
+                    yield "data: " + json.dumps(m) + "\n\n"
+                yield "data: " + json.dumps(tick) + "\n\n"
                 while True:
                     if await request.is_disconnected():
                         return

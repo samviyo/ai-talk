@@ -104,6 +104,8 @@ class Table:
             st.spent_usd = 0.0
             st.broke_emitted = False
             st.since = {k: 0 for k in SINCE_KEYS}
+        self.sse_seq = 0
+        self._push_sse_locked(self.spectator_init())
         self._notify_sse_locked()
 
     def budget_broke(self, seat: int) -> bool:
@@ -196,6 +198,40 @@ class Table:
         ]
         st.since["announce"] = len(events)
         return out
+
+    def spectator_init(self) -> dict[str, Any]:
+        return {
+            "kind": "init",
+            "seats": self.config.seats,
+            "game": self.game_counter,
+            "budget_usd": self.budget_usd,
+            "seat_info": [self.seat_view(s) for s in range(self.config.seats)],
+        }
+
+    def spectator_tick(self) -> dict[str, Any]:
+        g = self.game
+        alive = set(g.alive())
+        return {
+            "kind": "tick",
+            "game": self.game_counter,
+            "remaining_s": max(0.0, round(self.deadline() - time.monotonic(), 1)),
+            "window_s": self.window_s,
+            "pending": sorted(g.pending()) if g.result is None else [],
+            "thinking": [s for s, st in enumerate(self.seats) if st.llm_busy],
+            "waiting_ready": (
+                sorted(set(range(self.config.seats)) - self.ready_seats)
+                if self.need_role_check else []
+            ),
+            "seats": [
+                {"seat": s, "spent_usd": round(st.spent_usd, 6),
+                 "broke": self.is_broke(s), "alive": s in alive}
+                for s, st in enumerate(self.seats)
+            ],
+        }
+
+    def _push_sse_locked(self, payload: dict[str, Any]) -> None:
+        for q in self.sse_subs:
+            q.put_nowait(payload)
 
     def _notify_sse_locked(self) -> None:
         events = self.game.events(None)
@@ -334,6 +370,7 @@ async def ticker(table: Table) -> None:
             async with table.cond:
                 await table.check_clock_locked()
                 table._notify_sse_locked()
+                table._push_sse_locked(table.spectator_tick())
                 table.cond.notify_all()
             if (
                 table.auto_restart

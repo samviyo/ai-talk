@@ -5,3 +5,4 @@ runs/
 *.pyc
 .claude/worktrees/
 .serena/
+.playwright-mcp/
