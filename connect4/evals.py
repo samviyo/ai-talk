@@ -4,18 +4,24 @@ from __future__ import annotations
 
 import argparse
 import sys
+import tomllib
+from pathlib import Path
 
 from . import puzzles
 from .bots import column0_bot, random_bot
 from .bots.base import load_bot, unwrap
 from .play import MoveLog, play_game
 
-# USD per 1M tokens: (prompt, completion). Extend as needed.
-PRICES: dict[str, tuple[float, float]] = {
-    "gpt-4o-mini": (0.15, 0.60),
-    "gpt-4o": (2.50, 10.00),
-    "default": (1.00, 3.00),
-}
+def _load_prices() -> dict[str, tuple[float, float]]:
+    raw = tomllib.loads((Path(__file__).resolve().parent.parent / "prices.toml").read_text())
+    prices = {m: (float(v["input"]), float(v["output"])) for m, v in raw["models"].items()}
+    # Unknown models are priced high so a missing row never looks cheap.
+    prices["default"] = (4.00, 20.00)
+    return prices
+
+
+# USD per 1M tokens: (prompt, completion), shared with the Werewolf proxy.
+PRICES = _load_prices()
 
 GREEN, RED, RESET = "\033[32m", "\033[31m", "\033[0m"
 
