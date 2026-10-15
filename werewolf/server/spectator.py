@@ -68,7 +68,7 @@ section h2{margin:0 0 12px;font:800 28px/1 var(--disp);letter-spacing:.14em;text
 .bubble{background:var(--panel);border-radius:4px 18px 18px 18px;padding:12px 18px;display:flex;flex-direction:column;gap:6px}
 .bubble .who{display:flex;gap:10px;align-items:baseline;flex-wrap:wrap}.bubble .who b{font-size:20px}
 .tag{font-size:16px;font-weight:600;padding:2px 10px;border-radius:999px}
-.tag.claim{background:#2A2340;color:var(--whisper)}.tag.acc{background:#3A2A12;color:var(--gold)}
+.tag.claim{background:#2A2340;color:var(--whisper)}.tag.accuse{background:#3A2A12;color:var(--gold)}
 .bubble .chat{font-size:25px;line-height:1.3}
 .sys{font:18px/1.35 var(--mono);color:var(--dim);animation:in .4s}.sys.death{color:var(--wolf-soft)}
 @keyframes in{from{opacity:0;transform:translateY(10px)}}
@@ -229,7 +229,7 @@ function sys(text,cls){const el=document.createElement('div');el.className='sys 
 function post(p){
   stats.posts++;
   const el=document.createElement('div');el.className='post';
-  const tags=(p.claimed_role?'<span class="tag claim">claims '+esc(p.claimed_role)+'</span>':'')+(p.accuse!=null?'<span class="tag acc">accuses seat '+esc(p.accuse)+'</span>':'');
+  const tags=(p.claimed_role?'<span class="tag claim">claims '+esc(p.claimed_role)+'</span>':'')+(p.accuse!=null?'<span class="tag accuse">accuses seat '+esc(p.accuse)+'</span>':'');
   const chats=[p.chat,p.chat2].filter(Boolean).map(c=>'<div class="chat">'+esc(c)+'</div>').join('');
   el.innerHTML='<div class="av" style="background:'+tint(p.seat)+'">'+p.seat+'</div><div class="bubble"><div class="who"><b>'+esc(team(p.seat))+'</b>'+tags+'</div>'+chats+'</div>';
   $('board').appendChild(el);trim($('board'),40);flash(p.seat);
