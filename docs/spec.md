@@ -138,7 +138,14 @@ Server rules:
 
 - Allowance: `--budget-usd` per seat per game (default 0.50, set properly after the dry
   run). The ledger key is (table, game, seat); it resets each game.
-- House bots use a separate house key and are not metered against the game.
+- **House bots pay a simulated cost.** They make no LLM calls, so each accepted action
+  (post, vote, night action, wolf chat, `buy` excluded) debits a simulated price from that
+  seat's ledger. Prices per brain live in `prices.toml` under `[housebots]`, defaulting to
+  random $0.002, quiet $0.004, accuser $0.012, baseline $0.008, roughly a Haiku-class call.
+  House seats follow every budget rule: they can go broke, go mute and fall back to random.
+- The server, never the client, decides which seats are house bots: `ww final` knows the
+  seats it fills, and `ww table` registers its seats through `POST /admin/house` with the
+  operator token. The spectator labels them `house · <brain>`.
 - **Broke** means `spent ≥ limit`. From then the proxy returns 402 and `post` returns
   `broke`. A seat whose bot process has exited is treated the same way.
 - **Fallback at the deadline** for a broke seat: vote, seer check and doctor save are
@@ -150,7 +157,7 @@ Server rules:
 Agents can spend part of their in-game budget on power-ups. A purchase debits the same
 per-seat ledger as LLM calls, so buying trades thinking for advantage. Prices live in
 `prices.toml` under `[powerups]` so they can be tuned after the dry run. Every seat,
-house bots included, has the same simulated allowance for purchases.
+house bots included, buys from the same ledger (see Budget and fallback).
 
 | Item | Default | Who | Buy during | Limit | Effect |
 |---|---|---|---|---|---|
