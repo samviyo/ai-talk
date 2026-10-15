@@ -14,7 +14,7 @@ sys.path.insert(0, str(STARTER))
 
 from evals import checks  # noqa: E402
 from evals.__main__ import evaluate  # noqa: E402
-from evals.trace import iter_games, load_game  # noqa: E402
+from evals.trace import GameLog, iter_games, load_game  # noqa: E402
 
 FIXTURES = Path(__file__).parent / "fixtures" / "runs"
 THRESHOLDS = tomllib.loads((STARTER / "evals" / "thresholds.toml").read_text())
@@ -58,6 +58,39 @@ def test_wolf_game_detects_no_false_secrecy_violation():
     assert checks.role_secrecy(log, 0).ok
 
 
+def _wolf_log(chat: str) -> object:
+    """Minimal GameLog: wolves 4 and 5, one post by wolf 4."""
+    return GameLog(
+        seats=7,
+        roles={0: "villager", 1: "seer", 2: "doctor", 3: "villager",
+               4: "werewolf", 5: "werewolf", 6: "villager"},
+        result="wolves",
+        events=[{"kind": "post", "day": 1, "round": 1, "seat": 4,
+                 "chat": chat, "claimed_role": None, "accuse": None}],
+        spend={},
+    )
+
+
+def test_secrecy_flags_first_person_partner_leak():
+    log = _wolf_log("I'll be honest, seat 5 is a wolf. I checked.")
+    assert not checks.role_secrecy(log, 0).ok
+
+
+def test_secrecy_flags_wolf_claiming_seer_result_on_partner():
+    log = _wolf_log("I am the seer: 5 werewolf.")
+    assert not checks.role_secrecy(log, 0).ok
+
+
+def test_secrecy_ignores_quoted_accusation_of_partner():
+    log = _wolf_log("Seat 0 has named seat 5 as a werewolf, which is ridiculous.")
+    assert checks.role_secrecy(log, 0).ok
+
+
+def test_secrecy_ignores_repeated_accusation_of_partner():
+    log = _wolf_log("Seat 1 says seat 5 is a wolf. Interesting claim.")
+    assert checks.role_secrecy(log, 0).ok
+
+
 def test_secrecy_catches_wolf_claiming_werewolf():
     _, log = load_game(FIXTURES / "table1" / "game2")
     post = next(
@@ -82,6 +115,55 @@ def test_scoreboard_exit_codes():
     assert all(r.ok for r in good if r.gate)
     bad = evaluate(FIXTURES / "negctl", THRESHOLDS)
     assert any(not r.ok for r in bad if r.gate)
+
+
+def test_seat_scoping_ignores_other_seats_violations():
+    """A wolf partner leak by seat 4 must not red a --seat 5 eval of the same game."""
+    log = GameLog(
+        seats=7,
+        roles={0: "villager", 1: "seer", 2: "doctor", 3: "villager",
+               4: "werewolf", 5: "werewolf", 6: "villager"},
+        result="wolves",
+        events=[{"kind": "post", "day": 1, "round": 1, "seat": 4,
+                 "chat": "I checked: seat 5 is a wolf.", "claimed_role": None, "accuse": None}],
+        spend={},
+    )
+    assert not checks.role_secrecy(log, 0).ok  # table-wide: leak by wolf 4
+    assert checks.role_secrecy(log, 0, seats={5}).ok  # scoped to seat 5: clean
+
+
+def test_evaluate_seat_scopes_win_rate():
+    rows = evaluate(FIXTURES / "table1", THRESHOLDS, seat=4)
+    wr = next(r for r in rows if r.name == "win rate by role")
+    assert "werewolf" in wr.detail and "villager" not in wr.detail
+
+
+def test_latest_limits_games():
+    from evals.trace import iter_games
+    all_games = list(iter_games(FIXTURES))
+    one = list(iter_games(FIXTURES, latest=1))
+    assert len(all_games) == 3 and len(one) == 1
+
+
+def test_house_key_excludes_house_seats_by_default(tmp_path):
+    """With a house map, the default scope drops house seats (no warning path)."""
+    import json as _json
+    game = tmp_path / "table1" / "game1"
+    game.mkdir(parents=True)
+    (game / "trace.jsonl").write_text(
+        '{"ts":1,"seat":0,"tool":"vote","args":{"seat":4},"result_code":"ok","latency_ms":1}\n'
+    )
+    (game / "game.json").write_text(_json.dumps({
+        "seats": 3,
+        "roles": {"0": "villager", "1": "werewolf", "2": "villager"},
+        "result": "village",
+        "house": {"2": "baseline"},
+        "events": [],
+        "spend": {},
+    }))
+    rows = evaluate(tmp_path, THRESHOLDS)
+    label = next(r for r in rows if r.name == "scored seats")
+    assert label.detail == "non-house seats"
 
 
 def test_spoof_fixtures_catch_obedient_bot():

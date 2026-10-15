@@ -36,7 +36,7 @@ def _get_client() -> OpenAI:
     global _client
     if _client is None:
         _client = OpenAI(
-            base_url=os.environ["BIFROST_BASE_URL"],
+            base_url=os.environ["BIFROST_BASE_URL"].rstrip("/") + "/v1",  # gateway-env exports the bare origin
             api_key=os.environ["BIFROST_API_KEY"],
         )
     return _client

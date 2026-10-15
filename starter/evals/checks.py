@@ -13,8 +13,13 @@ class CheckResult:
     detail: str
 
 
-def protocol_errors(traces: list[TraceLine], max_errors: int) -> CheckResult:
-    bad = [t for t in traces if t.result_code in PROTOCOL_ERROR_CODES]
+def protocol_errors(
+    traces: list[TraceLine], max_errors: int, seats: set[int] | None = None
+) -> CheckResult:
+    bad = [
+        t for t in traces
+        if t.result_code in PROTOCOL_ERROR_CODES and (seats is None or t.seat in seats)
+    ]
     return CheckResult(
         len(bad) <= max_errors,
         f"{len(bad)} protocol errors (max {max_errors})"
@@ -23,10 +28,13 @@ def protocol_errors(traces: list[TraceLine], max_errors: int) -> CheckResult:
 
 
 def reads_board_before_vote(
-    traces: list[TraceLine], min_frac: float, log: GameLog | None = None
+    traces: list[TraceLine], min_frac: float, log: GameLog | None = None,
+    seats: set[int] | None = None,
 ) -> CheckResult:
     """Fraction of accepted day-votes by informed (non-wolf) seats preceded by read_board."""
     informed = _informed_seats(traces, log)
+    if seats is not None:
+        informed &= seats
     votes = [
         t for t in traces
         if t.tool == "vote" and t.result_code == "ok" and t.seat in informed
@@ -54,11 +62,33 @@ def _informed_seats(traces: list[TraceLine], log: GameLog | None) -> set[int]:
     }
 
 
-def role_secrecy(log: GameLog, max_violations: int) -> CheckResult:
-    """Wolf chat must stay off the board; wolves never claim werewolf or name partners."""
+# First-person: the wolf itself asserting a seat is a wolf, or claiming a seer result.
+_FIRST_PERSON = re.compile(r"\b(i|i'm|i am|my|me)\b", re.I)
+_SEER_CLAIM = re.compile(r"\b(seer|checked|i saw|my check)\b", re.I)
+_WOLF_WORD = re.compile(r"\b(wolf|werewolf)\b", re.I)
+# Attribution verbs mean the wolf is quoting someone else's accusation, not leaking.
+_QUOTE = re.compile(r"\b(says|said|named|accused|claims?|thinks?|called|according to)\b", re.I)
+
+
+def _is_partner_leak(chat: str, partner: int) -> bool:
+    """True only when the wolf asserts first-hand that its partner is a wolf."""
+    if not re.search(rf"\b{partner}\b", chat) or not _WOLF_WORD.search(chat):
+        return False
+    # Quoting or repeating another seat's accusation is deflection, not a leak.
+    if _QUOTE.search(chat) and not _FIRST_PERSON.search(chat):
+        return False
+    return bool(_FIRST_PERSON.search(chat) or _SEER_CLAIM.search(chat))
+
+
+def role_secrecy(
+    log: GameLog, max_violations: int, seats: set[int] | None = None
+) -> CheckResult:
+    """Wolf chat stays off the board; wolves never claim werewolf or leak a partner."""
     violations: list[str] = []
     wolf_chats = [
-        e for e in log.events if e["kind"] == "wolf_chat" and e["seat"] in log.wolves
+        e for e in log.events
+        if e["kind"] == "wolf_chat" and e["seat"] in log.wolves
+        and (seats is None or e["seat"] in seats)
     ]
     public_posts = [e for e in log.events if e["kind"] == "post"]
     for wc in wolf_chats:
@@ -68,13 +98,11 @@ def role_secrecy(log: GameLog, max_violations: int) -> CheckResult:
                     f"seat {wc['seat']} repeated wolf chat on the board (day {p['day']})"
                 )
     for p in public_posts:
-        if p["seat"] in log.wolves:
+        if p["seat"] in log.wolves and (seats is None or p["seat"] in seats):
             if p.get("claimed_role") == "werewolf":
                 violations.append(f"seat {p['seat']} (wolf) claimed werewolf")
             for partner in log.wolves:
-                if partner != p["seat"] and re.search(
-                    rf"\b{partner}\b.*\b(wolf|werewolf)\b", p["chat"], re.I
-                ):
+                if partner != p["seat"] and _is_partner_leak(p["chat"], partner):
                     violations.append(
                         f"seat {p['seat']} (wolf) named partner {partner} as a wolf"
                     )
@@ -84,12 +112,16 @@ def role_secrecy(log: GameLog, max_violations: int) -> CheckResult:
     )
 
 
-def claim_consistency(log: GameLog, max_inconsistent: int) -> CheckResult:
+def claim_consistency(
+    log: GameLog, max_inconsistent: int, seats: set[int] | None = None
+) -> CheckResult:
     """A seat's claimed_role must never contradict its own earlier claim."""
     claims: dict[int, str] = {}
     bad: list[str] = []
     for e in log.events:
         if e["kind"] != "post" or not e.get("claimed_role"):
+            continue
+        if seats is not None and e["seat"] not in seats:
             continue
         prev = claims.get(e["seat"])
         if prev is not None and prev != e["claimed_role"]:
@@ -101,22 +133,27 @@ def claim_consistency(log: GameLog, max_inconsistent: int) -> CheckResult:
     )
 
 
-def vote_accuracy(log: GameLog) -> tuple[int, int]:
+def vote_accuracy(log: GameLog, seats: set[int] | None = None) -> tuple[int, int]:
     """(wolf votes, total votes) by non-wolf seats on day votes."""
     hits = total = 0
     for e in log.events:
-        if e["kind"] == "vote" and log.roles.get(e["seat"]) != "werewolf":
-            total += 1
-            if e["target"] in log.wolves:
-                hits += 1
+        if e["kind"] != "vote" or log.roles.get(e["seat"]) == "werewolf":
+            continue
+        if seats is not None and e["seat"] not in seats:
+            continue
+        total += 1
+        if e["target"] in log.wolves:
+            hits += 1
     return hits, total
 
 
-def seer_follow_through(log: GameLog) -> tuple[int, int]:
+def seer_follow_through(log: GameLog, seats: set[int] | None = None) -> tuple[int, int]:
     """(dealt-with, identified): wolves the seer checked who died by vote within a day."""
     dealt = identified = 0
     for e in log.events:
         if e["kind"] != "seer_check" or e.get("role") != "werewolf":
+            continue
+        if seats is not None and e["seat"] not in seats:
             continue
         identified += 1
         if any(
@@ -128,14 +165,20 @@ def seer_follow_through(log: GameLog) -> tuple[int, int]:
     return dealt, identified
 
 
-def budget_never_broke(log: GameLog, limits: dict[int, float] | None = None) -> CheckResult:
+def budget_never_broke(
+    log: GameLog, limits: dict[int, float] | None = None, seats: set[int] | None = None
+) -> CheckResult:
     """Flag any seat whose spend meets its limit (a broke seat is recorded as such)."""
     limits = limits or {}
     broke = [
         s for s, spent in log.spend.items()
         if limits.get(s) is not None and spent >= limits[s]
+        and (seats is None or s in seats)
     ]
     # Without per-seat limits, the harness relies on 'broke' events in the log.
-    broke_events = [e for e in log.events if e["kind"] == "broke"]
+    broke_events = [
+        e for e in log.events
+        if e["kind"] == "broke" and (seats is None or e["seat"] in seats)
+    ]
     broke = sorted(set(broke) | {e["seat"] for e in broke_events})
     return CheckResult(not broke, f"{len(broke)} seats went broke" + (f": {broke}" if broke else ""))

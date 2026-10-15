@@ -101,3 +101,21 @@ def most_accused(view: View, candidates: list[int], rng: random.Random) -> int |
         return None
     top = max(counts.values())
     return rng.choice(sorted(s for s, c in counts.items() if c == top))
+
+
+def seer_named_wolf(view: View, candidates: list[int]) -> int | None:
+    """The wolf the first living seer claim named, from the claim text or a relay post."""
+    dead = set((view.get("dead") or {}).keys())
+    for post in view.get("board") or []:
+        seat = post.get("seat")
+        if not isinstance(seat, int) or seat in dead:
+            continue
+        chat = str(post.get("chat") or "").lower()
+        is_claim = post.get("claimed_role") == "seer" and "seer:" in chat
+        is_relay = chat.startswith("the seer says")
+        if not (is_claim or is_relay):
+            continue
+        target = post.get("accuse")
+        if isinstance(target, int) and target in candidates and target not in dead:
+            return target
+    return None
