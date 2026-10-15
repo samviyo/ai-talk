@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
+import time
 from typing import Any
 
 from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
@@ -97,7 +98,7 @@ def create_app(state: AppState) -> Starlette:
                 {"error": {"code": "bad_schema", "message": "invalid json"}},
                 status_code=400,
             )
-        async with table.lock:
+        async with table.cond:
             await table.check_clock_locked()
             broke = table.is_broke(seat)
             if broke:
@@ -113,19 +114,31 @@ def create_app(state: AppState) -> Starlette:
             st.llm_busy = True
             legal = table.game.legal_targets(seat)
             key = state.key_for(table, seat)
+            started_game = table.game_counter
+        t0 = time.monotonic()
         try:
             status, body, charges = await state.proxy.chat_completions(
                 payload, key or "", legal
             )
         finally:
-            async with table.lock:
-                st.llm_busy = False
-        usd = charges.get("usd", 0.0)
-        if usd:
+            # Charge and clear busy under one lock so no call sneaks past broke.
             async with table.cond:
-                table.charge_locked(seat, usd)
-                table._notify_sse_locked()
-                table._trace(seat, "llm", {"model": payload.get("model")}, str(status), 0.0)
+                st.llm_busy = False
+                usd = charges.get("usd", 0.0)
+                if usd:
+                    if table.game_counter == started_game:
+                        table.charge_locked(seat, usd)
+                        table._notify_sse_locked()
+                    else:
+                        # the game that issued the call already settled; record only
+                        table._trace(
+                            seat, "llm_cross_game",
+                            {"game": started_game, "usd": round(usd, 6)}, "ok", 0.0,
+                        )
+                table._trace(
+                    seat, "llm", {"model": payload.get("model")}, str(status),
+                    (time.monotonic() - t0) * 1000,
+                )
         return JSONResponse(body, status_code=status)
 
     async def _ticker(table):

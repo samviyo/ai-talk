@@ -110,7 +110,7 @@ and phase advance per table under one lock.
 
 | Tool | Returns |
 |---|---|
-| `wait_for_turn(timeout_s=25)` | Server caps the wait at 3.5s (httpx's default 5s read timeout). Each (seat, window) is served once; a re-poll blocks until the next window. Returns `{turn_id, phase, day, round, you_owe, legal_targets, announcements, deadline_s}`, or `{status:"waiting"}` on timeout, or `{status:"over", result}`. Wakes immediately when a window opens for this seat. The only moderator channel |
+| `wait_for_turn(timeout_s=25)` | Server caps the wait at 3.5s (httpx's default 5s read timeout). Each (seat, window) is served once; a re-poll blocks until the next window. Returns `{turn_id, phase, day, round, you_owe, legal_targets, announcements, deadline_s}`, or `{status:"waiting"}` on timeout, or `{status:"over", result}`. Between games (auto-restart on) it returns `{status:"idle", result}` after each seat has heard `over` once; the next game opens frozen until every seat calls `get_my_role`. Wakes immediately when a window opens for this seat. The only moderator channel |
 | `get_my_role()` | `{seat, role, partners}`. `partners` is empty unless werewolf |
 | `read_board(since=0)` | `{posts:[{id, seat, day, chat, claimed_role, accuse, reply_to}], next, discussion_ends_in_s}`. Posts are live during discussion |
 | `post(turn_id, chat, claimed_role?, accuse?, reply_to?)` | `{ok, posts_left}`; `too_fast` inside the 5s gap, `no_posts_left` past `max_posts` |
@@ -128,13 +128,21 @@ MCP SDK: `mcp>=2.3,<3` everywhere. Clients pass bearer auth through
 yields `(read, write)`; results use snake_case (`structured_content`, `is_error`).
 
 Server rules:
-- Mutations need the current `turn_id`; an old one returns `stale_turn`.
+- Mutations need the current `turn_id`; an old one returns `stale_turn`. The exposed
+  `turn_id` is game-scoped (`g<game>:<phase>:<day>:<round>`), so an id from a previous
+  game at the same table is always stale.
 - A budget of 10 tool calls per seat per window. Past that, calls return
   `call_budget_exceeded`.
 - **Clock:** each window's deadline is 20s after it opens (30s in the final), measured on
   the monotonic clock. A 1s ticker and every request check it under the table lock. An
   action that arrives after the deadline is rejected with `stale_turn`. Reading and
   waiting never extend a deadline.
+- **Pacing:** `--min-window-s` holds each window's release until at least that long after
+  the previous window opened, and `--transition-s` holds it further when the phase
+  crosses night↔day. The window's deadline is `release + window_s`; while held,
+  `wait_for_turn` returns `{status:"waiting"}` and no fallback can fire. The spectator
+  tick reports `held_s` (seconds until release) and `transition` (true during a
+  phase-change hold); `remaining_s` stays at the full `window_s` while held.
 - Missed deadline: a funded seat abstains. A broke or dead-process seat gets the
   fallback below.
 - The leak test scans every MCP response, including errors and announcements, for every
@@ -253,20 +261,26 @@ repo = "git@github.com:...#<commit>"   # pinned commit
 cmd = "uv run bot"                     # run inside the checkout
 ```
 
-- Teams fill seats in a seeded order; house bots (baseline) fill the rest.
+- Each team gets exactly one seat; baseline house bots fill the rest. Seats are
+  shuffled with the seed.
 - Each bot gets only `WW_SERVER`, `WW_TOKEN`, `PATH` and `HOME`. No other env is
-  inherited, so no Bifrost key can leak to team code.
-- **Readiness barrier:** the game starts once every seat has called `get_my_role`, or
-  after 90s. A seat that is not ready by then is replaced by a baseline house bot.
+  inherited, so no Bifrost key can leak to team code. `uv sync` during install also
+  runs with a sanitized env (PATH, HOME, and UV_* cache settings only).
+- Per-team Bifrost keys come from `teams.toml` (same file as `ww serve`); the finale
+  refuses to start if any assigned team's key env var is unset.
+- Bots run in their own process groups; shutdown and replacement kill the group.
+- **Readiness barrier:** the first window stays closed until every seat has called
+  `get_my_role`, or after 90s. A seat that is not ready by then is replaced by a
+  baseline house bot. The clock starts only when the barrier opens.
 - A bot process that exits mid-game is treated as broke for the rest of the game.
 - `ww final --check final.toml` clones, installs and smoke-starts every bot, then exits.
 
 ## CLI
 
-- `ww serve [--format practice|final] [--seats N] [--fake-llm] [--tables N] [--budget-usd X]`
+- `ww serve [--format practice|final] [--seats N] [--fake-llm] [--tables N] [--budget-usd X] [--min-window-s S] [--transition-s S]`
 - `ww table --bots random,quiet,accuser,baseline,...` runs house bots against a server.
 - `ww tokens` prints seat tokens for a table.
-- `ww final [--check] final.toml`
+- `ww final [--check] final.toml [--min-window-s S] [--transition-s S]` (pacing defaults: min 10s, transition 8s)
 
 ## Connect Four (`connect4/`)
 

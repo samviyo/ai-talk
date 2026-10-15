@@ -57,6 +57,9 @@ async def start_server(
     seats: int = 7,
     auto_restart: bool = False,
     transport: Any = None,
+    min_window_s: float = 0.0,
+    transition_s: float = 0.0,
+    transition_on_start: bool = True,
 ) -> RunningServer:
     config = Config(
         seats=seats, wolves=2, discussion_rounds=2, max_days=5, seed=seed
@@ -67,6 +70,8 @@ async def start_server(
         budget_usd=budget,
         window_s=window_s,
         runs_dir=tmp_path / "runs",
+        min_window_s=min_window_s,
+        transition_s=transition_s,
         prices=PRICES,
         fake_llm=fake_llm,
         base_url="http://fake-upstream",
@@ -74,6 +79,9 @@ async def start_server(
         upstream_transport=transport,
         auto_restart=auto_restart,
     )
+    state.tables[0].transition_on_start = transition_on_start
+    if not transition_on_start:
+        state.tables[0]._transition_until = 0.0
     port = free_port()
     server = uvicorn.Server(
         uvicorn.Config(create_app(state), host="127.0.0.1", port=port, log_level="error")

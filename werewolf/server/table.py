@@ -24,6 +24,14 @@ from werewolf.engine import (
 
 TOOL_CALL_BUDGET = 10
 ANNOUNCEMENT_KINDS = {"death", "no_death", "seer_result", "phase", "result"}
+DAY_PHASES = ("day_discussion", "day_vote")
+
+
+def _is_transition(prev: str | None, new: str) -> bool:
+    # True when the window crosses between night and day phases.
+    if prev is None or prev == new:
+        return False
+    return (prev == "night") != (new == "night")
 
 # Per-game counters, reset when a new game starts at the same table.
 SINCE_KEYS = ("events", "wolf_chat", "board", "announce")
@@ -56,6 +64,9 @@ class Table:
         teams: list[str],
         auto_restart: bool = True,
         seed_step: int = 7919,
+        min_window_s: float = 0.0,
+        transition_s: float = 0.0,
+        transition_on_start: bool = True,
     ) -> None:
         self.name = name
         self.config = config
@@ -64,6 +75,9 @@ class Table:
         self.runs_dir = runs_dir
         self.auto_restart = auto_restart
         self.seed_step = seed_step
+        self.min_window_s = min_window_s
+        self.transition_s = transition_s
+        self.transition_on_start = transition_on_start
         self.game_counter = 1  # the game opened in __init__ is game1
         self.lock = asyncio.Lock()
         self.cond = asyncio.Condition(self.lock)
@@ -78,11 +92,21 @@ class Table:
         self.ready_seats: set[int] = set(range(config.seats))
         self.ready_event = asyncio.Event()
         self.need_role_check = False  # finale only: game waits for get_my_role
+        # freeze holds the clock and turn serving until readiness/replacement completes
+        self.frozen = False
+        self.idle = False  # between games: finished, next game not yet started
         self.traces: list[dict[str, Any]] = []
         self.sse_seq = 0
         self.sse_subs: list[asyncio.Queue[dict[str, Any]]] = []
         self._run_written = False
         self._served_turn: dict[int, str] = {}
+        self._clocked_turn: str | None = self.game.turn_id
+        self._released_at = time.monotonic()
+        self._prev_phase: str | None = None
+        # game start counts as a transition so the projector shows a card first
+        self._transition_until = (
+            time.monotonic() + self.transition_s if transition_on_start else 0.0
+        )
 
     # --- game lifecycle ------------------------------------------------------
 
@@ -97,16 +121,45 @@ class Table:
         self.game = Game(replace(self.config, seed=seed))
         self.traces = []
         self.window_opened = time.monotonic()
-        self.need_role_check = need_role_check
-        self.ready_seats = set() if need_role_check else set(range(self.config.seats))
+        self.idle = False
+        # Every new game waits for each seat to call get_my_role once.
+        self.need_role_check = True
+        self.frozen = True
+        self.ready_seats = set()
         self.ready_event.clear()
         for st in self.seats:
             st.spent_usd = 0.0
             st.broke_emitted = False
             st.since = {k: 0 for k in SINCE_KEYS}
         self.sse_seq = 0
+        self._clocked_turn = self.game.turn_id
+        self._released_at = time.monotonic()
+        self._prev_phase = None
+        self._transition_until = (
+            time.monotonic() + self.transition_s if self.transition_on_start else 0.0
+        )
+        if not need_role_check:
+            # The constructor already clocks game1; later games re-clock here.
+            self.note_window_locked()
         self._push_sse_locked(self.spectator_init())
         self._notify_sse_locked()
+
+    def unfreeze_locked(self) -> None:
+        """Open the held first window with a fresh deadline; caller holds the lock."""
+        if not self.frozen:
+            return
+        self.frozen = False
+        self.need_role_check = False
+        self.ready_seats = set(range(self.config.seats))
+        self.ready_event.set()
+        self._clocked_turn = self.game.turn_id
+        self.window_opened = time.monotonic()
+        self._released_at = time.monotonic()
+        self._push_sse_locked(self.spectator_tick())
+
+    def public_turn_id(self) -> str:
+        # Game-scoped so a stale id from a previous game is never accepted.
+        return f"g{self.game_counter}:{self.game.turn_id}"
 
     def budget_broke(self, seat: int) -> bool:
         return self.seats[seat].spent_usd >= self.budget_usd
@@ -129,25 +182,69 @@ class Table:
 
     # --- clock ---------------------------------------------------------------
 
+    def release_at(self) -> float:
+        # Held until readiness, min dwell, and any night/day transition pause pass.
+        if self.frozen:
+            return float("inf")
+        return max(
+            self._released_at,
+            self.window_opened + self.min_window_s,
+            self._transition_until,
+        )
+
+    def transition_active(self) -> bool:
+        return not self.frozen and time.monotonic() < self._transition_until
+
     def deadline(self) -> float:
-        return self.window_opened + self.window_s
+        return self.release_at() + self.window_s
+
+    def holding(self) -> bool:
+        return self.frozen or time.monotonic() < self.release_at()
 
     async def check_clock_locked(self) -> None:
         """Caller holds the lock; opens/clock-advances windows, applies fallback."""
         g = self.game
-        if g.turn_id != getattr(self, "_clocked_turn", None):
-            self._clocked_turn = g.turn_id
-            self.window_opened = time.monotonic()
-        if g.result is None and time.monotonic() >= self.deadline():
+        self.note_window_locked()
+        if (
+            g.result is None
+            and not self.frozen
+            and time.monotonic() >= self.deadline()
+        ):
             for seat in list(g.pending()):
                 self._fallback_locked(seat)
-            self._clocked_turn = g.turn_id
-            self.window_opened = time.monotonic()
-            if g.result is not None and not self._run_written:
-                self._run_written = True
+            self.note_window_locked()
+        self._write_run_if_done_locked()
+        if (
+            self.auto_restart
+            and not self.frozen
+            and self.game.result is not None
+            and not self.idle
+        ):
+            # Mark the gap; the next game opens on get_my_role readiness.
+            self.idle = True
+
+    def _write_run_if_done_locked(self) -> None:
+        """Persist a finished game before any restart; caller holds the lock."""
+        if self.game.result is not None and not self._run_written:
+            try:
                 self.write_run()
+            except Exception:  # never lose the fact the game ended
+                import traceback
+
+                traceback.print_exc()
+            self._run_written = True
+
+    def note_window_locked(self) -> None:
+        """Start the window deadline the moment the engine's turn_id changes."""
+        if self.game.turn_id != self._clocked_turn:
+            self._clocked_turn = self.game.turn_id
+            self.window_opened = time.monotonic()
+            if _is_transition(self._prev_phase, self.game.phase):
+                self._transition_until = self.window_opened + self.transition_s
+            self._prev_phase = self.game.phase
 
     def _fallback_locked(self, seat: int) -> None:
+        t0 = time.monotonic()
         g = self.game
         obligation = g.pending().get(seat)
         if obligation is None:
@@ -155,7 +252,10 @@ class Table:
         broke = self.is_broke(seat)
         if not broke:
             g.abstain(seat)
-            self._trace(seat, "_fallback_abstain", {}, "ok", 0.0)
+            self._trace(
+                seat, "_fallback_abstain", {}, "ok",
+                (time.monotonic() - t0) * 1000,
+            )
             return
         rng = self._rng
         try:
@@ -178,13 +278,21 @@ class Table:
                 if funded:
                     g.abstain(seat)  # a funded wolf still decides the kill
                 else:
-                    targets = g.legal_targets(seat)
-                    g.act(seat, NightKill(rng.choice(targets))) if targets else g.abstain(seat)
+                    # one random ballot total: the lowest-seat wolf submits it
+                    submitter = min(wolves_alive)
+                    if seat == submitter:
+                        targets = g.legal_targets(seat)
+                        g.act(seat, NightKill(rng.choice(targets))) if targets else g.abstain(seat)
+                    else:
+                        g.abstain(seat)
             else:  # post: broke seats stay silent
                 g.abstain(seat)
         except IllegalAction:
             g.abstain(seat)
-        self._trace(seat, "_fallback_broke", {"obligation": obligation}, "ok", 0.0)
+        self._trace(
+            seat, "_fallback_broke", {"obligation": obligation}, "ok",
+            (time.monotonic() - t0) * 1000,
+        )
 
     # --- events / announcements ----------------------------------------------
 
@@ -211,10 +319,18 @@ class Table:
     def spectator_tick(self) -> dict[str, Any]:
         g = self.game
         alive = set(g.alive())
+        now = time.monotonic()
+        held = max(0.0, round(self.release_at() - now, 1))
+        # The turn clock is paused during a hold: full window until release.
+        remaining = self.window_s if held > 0 else max(
+            0.0, round(self.deadline() - now, 1)
+        )
         return {
             "kind": "tick",
             "game": self.game_counter,
-            "remaining_s": max(0.0, round(self.deadline() - time.monotonic(), 1)),
+            "remaining_s": remaining,
+            "held_s": held,
+            "transition": self.transition_active(),
             "window_s": self.window_s,
             "pending": sorted(g.pending()) if g.result is None else [],
             "thinking": [s for s, st in enumerate(self.seats) if st.llm_busy],
@@ -363,9 +479,10 @@ class Table:
 
 
 async def ticker(table: Table) -> None:
-    """1s clock: applies deadlines and restarts finished games."""
+    """1s clock: applies deadlines and marks finished games idle."""
     while True:
-        await asyncio.sleep(1.0)
+        # Wake at the release instant too, so held windows start on time.
+        await asyncio.sleep(min(1.0, max(0.05, table.release_at() - time.monotonic())))
         try:
             async with table.cond:
                 await table.check_clock_locked()
@@ -374,13 +491,16 @@ async def ticker(table: Table) -> None:
                 table.cond.notify_all()
             if (
                 table.auto_restart
+                and not table.idle
                 and table.game.result is not None
                 and table._run_written
             ):
                 await asyncio.sleep(0.2)  # let waiters observe the result
                 async with table.cond:
-                    if table.game.result is not None and table._run_written:
-                        table.start_game_locked()
+                    # The next game opens only when its readiness rule is met.
+                    if not table.idle and table.game.result is not None:
+                        table.idle = True
+                        table._push_sse_locked(table.spectator_tick())
                         table.cond.notify_all()
         except Exception:  # keep the clock alive
             import traceback

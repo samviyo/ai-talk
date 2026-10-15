@@ -18,7 +18,7 @@ from .state import AppState, DEFAULT_PRICES as _FALLBACK_PRICES
 
 FORMATS = {
     "practice": dict(seats=7, wolves=2, discussion_rounds=2, max_days=5),
-    "final": dict(seats=12, wolves=3, discussion_rounds=1, max_days=6),
+    "final": dict(seats=12, wolves=3, discussion_rounds=2, max_days=6),
 }
 
 
@@ -59,6 +59,8 @@ def build_state(args: argparse.Namespace) -> AppState:
         fake_llm=args.fake_llm,
         base_url=os.environ.get("BIFROST_BASE_URL"),
         teams_toml=_load_teams(),
+        min_window_s=args.min_window_s,
+        transition_s=args.transition_s,
     )
 
 
@@ -155,6 +157,7 @@ def cmd_final(args: argparse.Namespace) -> int:
         run_final(
             Path(args.toml), check=args.check, port=args.port,
             budget_usd=args.budget_usd,
+            min_window_s=args.min_window_s, transition_s=args.transition_s,
         )
     )
 
@@ -170,6 +173,8 @@ def main() -> int:
         p.add_argument("--tables", type=int, default=1)
         p.add_argument("--budget-usd", type=float, default=0.50)
         p.add_argument("--window-s", type=float, default=20.0)
+        p.add_argument("--min-window-s", type=float, default=0.0)
+        p.add_argument("--transition-s", type=float, default=0.0)
         p.add_argument("--runs-dir", default="runs")
         p.add_argument("--fake-llm", action="store_true")
 
@@ -198,6 +203,8 @@ def main() -> int:
     p_final.add_argument("--check", action="store_true")
     p_final.add_argument("--port", type=int, default=8000)
     p_final.add_argument("--budget-usd", type=float, default=0.50)
+    p_final.add_argument("--min-window-s", type=float, default=10.0)
+    p_final.add_argument("--transition-s", type=float, default=6.0)
     p_final.set_defaults(func=cmd_final)
 
     args = parser.parse_args()
