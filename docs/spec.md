@@ -107,7 +107,7 @@ and phase advance per table under one lock.
 | `read_board(since=0)` | `{posts:[{id, seat, day, round, chat, claimed_role, accuse}], next}`. Revealed posts only |
 | `post(turn_id, chat, claimed_role?, accuse?)` | `{ok}` |
 | `vote(turn_id, seat)` | `{ok}` |
-| `night_action(turn_id, target)` | `{ok}`; a seer check also returns `{role}` |
+| `night_action(turn_id, target)` | `{ok}`. A seer's result arrives as the `seer_result` announcement when night resolves (see Power-ups) |
 | `wolf_chat(msg)` / `read_wolf_chat(since=0)` | Werewolves only; others get `not_your_turn`. Read returns `{messages:[{id, seat, day, msg}], next}` |
 | `get_budget()` | `{spent_usd, limit_usd, remaining_usd, broke}` |
 
@@ -144,6 +144,60 @@ Server rules:
 - **Fallback at the deadline** for a broke seat: vote, seer check and doctor save are
   random legal targets; no post. A broke wolf submits no kill ballot while any funded wolf
   is alive; if every living wolf is broke, one random legal kill is submitted.
+
+## Power-ups
+
+Agents can spend part of their in-game budget on power-ups. A purchase debits the same
+per-seat ledger as LLM calls, so buying trades thinking for advantage. Prices live in
+`prices.toml` under `[powerups]` so they can be tuned after the dry run. Every seat,
+house bots included, has the same simulated allowance for purchases.
+
+| Item | Default | Who | Buy during | Limit | Effect |
+|---|---|---|---|---|---|
+| `extra_post` | $0.05 | living seat | a `post` window, before posting | 1 per round | that seat's `post` may carry `chat2`; both messages reveal together at window close |
+| `whisper` | $0.08 | living seat | any day window | 1 per day | private message (≤280 chars) to one other living seat, delivered when the window closes |
+| `double_vote` | $0.15 | living seat | its `vote` window, before voting | 1 per game | its ballot counts twice |
+| `shield` | $0.20 | living non-wolf | any day window except on day `max_days` | 1 per day | protects the buyer from the kill on the coming night only |
+| `frame` | $0.15 | living wolf | a night window | 1 per night | any living non-wolf target reads as `werewolf` to the seer tonight |
+
+**Purchase rules**
+- Price must be ≤ remaining budget, else `insufficient_budget`. Over the limit:
+  `already_bought`. Wrong time, role or target: `not_available`. Rejected buys charge
+  nothing. `shop()` returns the same availability, so errors reveal nothing it doesn't.
+- No refunds. An effect whose buyer or target dies, or that never triggers, expires.
+- A purchase that leaves the seat broke follows the broke rules: it gets no further
+  manual actions (`broke`) and the deadline fallback acts for it. Purchased effects stay
+  active, so a broke seat's random ballot still counts twice after `double_vote`.
+
+**Resolution**
+- Night, in order: frames apply, then the seer's check resolves, then the kill plurality,
+  then the doctor save and any shield. A protected target lives and the night shows as
+  `no_death` either way.
+- With frames, a seer check no longer returns the role immediately: `night_action` returns
+  `{ok}` and the result arrives as the `seer_result` announcement when night resolves.
+  This holds for every check, framed or not, so timing reveals nothing.
+- Votes: weighted totals; a tie or zero weight eliminates nobody. The tally lists each
+  ballot with its `weight`.
+- Whispers buffer until the window closes and reach the target as
+  `{kind: "whisper", from, msg}` in its next `wait_for_turn`. Board text and whispers are
+  untrusted player content.
+
+**What other seats can see.** Purchase records are private to the buyer. Others see only
+these effects: a second message in a post, a ballot weight of 2 in the tally, a whisper
+addressed to them, and whatever they infer from a `no_death` or a seer claim. The
+spectator sees every purchase as it happens. The leak test covers `powerup` and
+`whisper` events, error codes, and announcement timing as well as roles.
+
+**Interfaces**
+- Engine: `Game.apply_powerup(seat, item, target=None, msg=None)` raises
+  `IllegalAction(not_available | already_bought | invalid_target | too_long)`. Budget
+  checks stay in the server. Events: `powerup{seat, item, target}` (audience: buyer) and
+  `whisper{seat, target, msg}` (audience: buyer and target), both in the omniscient view.
+- MCP: `shop()` → `{items: [{item, price_usd, available, reason?}], remaining_usd}`;
+  `buy(turn_id, item, target?, msg?)` → `{ok, remaining_usd}`. Both count against the
+  10-calls-per-window budget. `post` gains optional `chat2`.
+- `game.json` events gain `{kind:"powerup", seat, item, target, usd}` and
+  `{kind:"whisper", seat, target, msg}`. `spend` stays the total per seat, LLM plus items.
 
 ## LLM proxy
 
