@@ -45,11 +45,11 @@ main{position:relative;display:flex;align-items:center;justify-content:center}
 .seat{position:absolute;width:150px;transform:translate(-50%,-50%);padding:10px 10px 10px;border-radius:16px;background:var(--panel);
  text-align:center;display:flex;flex-direction:column;align-items:center;gap:4px;box-shadow:0 0 0 1px var(--ring);transition:opacity .6s,box-shadow .3s,transform .4s}
 .seat .av{width:48px;height:48px;border-radius:50%;display:flex;align-items:center;justify-content:center;font:900 30px/1 var(--disp);color:var(--bg)}
-.seat .team{font-weight:600;font-size:18px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:130px}
-.seat .role{font:800 18px/1 var(--disp);letter-spacing:.12em;text-transform:uppercase}
+.seat .team{font-weight:600;font-size:21px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:130px}
+.seat .role{font:800 21px/1 var(--disp);letter-spacing:.12em;text-transform:uppercase}
 .seat .bar{width:100%;height:6px;border-radius:3px;background:var(--line);overflow:hidden}.seat .bar i{display:block;height:100%;background:var(--villager);transition:width .6s}
-.seat .usd{font:16px/1 var(--mono);color:var(--dim)}
-.seat .badge{font:800 16px/1 var(--disp);letter-spacing:.1em;text-transform:uppercase;padding:4px 10px;border-radius:999px;color:var(--bg)}
+.seat .usd{font:19px/1 var(--mono);color:var(--dim)}
+.seat .badge{font:800 19px/1 var(--disp);letter-spacing:.1em;text-transform:uppercase;padding:4px 10px;border-radius:999px;color:var(--bg)}
 .seat.wolf{box-shadow:0 0 0 2px var(--wolf)}
 .seat.pending{box-shadow:0 0 0 3px var(--gold)}
 .seat.thinking{animation:pulse 1.1s infinite}
@@ -67,7 +67,7 @@ main{position:relative;display:flex;align-items:center;justify-content:center}
 #spot .say{font-size:34px;line-height:1.3;font-weight:500;text-wrap:balance}
 #spot .say.big{font:900 64px/1.05 var(--disp);text-transform:uppercase;letter-spacing:.02em}
 #spot .tags{display:flex;gap:8px;flex-wrap:wrap;justify-content:center}
-#upnext{font:20px/1 var(--mono);color:var(--dim);min-height:20px}
+#upnext{font:24px/1 var(--mono);color:var(--dim);min-height:20px}
 #center.live h3,#center.live #accused{display:none!important}#spot.idle{display:none}
 .seat.dead{opacity:.32}.seat.dead .av{background:#4A5260!important}
 .seat.broke .bar i{background:var(--wolf)}.seat.broke .usd{color:var(--wolf);font-weight:600}
@@ -82,10 +82,10 @@ section h2{margin:0 0 12px;font:800 28px/1 var(--disp);letter-spacing:.14em;text
 .post .av{width:52px;height:52px;border-radius:50%;display:flex;align-items:center;justify-content:center;font:900 28px/1 var(--disp);color:var(--bg)}
 .bubble{background:var(--panel);border-radius:4px 18px 18px 18px;padding:12px 18px;display:flex;flex-direction:column;gap:6px}
 .bubble .who{display:flex;gap:10px;align-items:baseline;flex-wrap:wrap}.bubble .who b{font-size:20px}
-.tag{font-size:16px;font-weight:600;padding:2px 10px;border-radius:999px}
+.tag{font-size:19px;font-weight:600;padding:2px 10px;border-radius:999px}
 .tag.claim{background:#2A2340;color:var(--whisper)}.tag.accuse{background:#3A2A12;color:var(--gold)}
 .bubble .chat{font-size:25px;line-height:1.3}
-.sys{font:18px/1.35 var(--mono);color:var(--dim);animation:in .4s}.sys.death{color:var(--wolf-soft)}
+.sys{font:21px/1.35 var(--mono);color:var(--dim);animation:in .4s}.sys.death{color:var(--wolf-soft)}
 @keyframes in{from{opacity:0;transform:translateY(10px)}}
 #den{background:#1A1014;border-top-color:#3A1E24;height:210px;flex:none}
 #den h2{color:var(--wolf-soft)}
@@ -100,7 +100,7 @@ section h2{margin:0 0 12px;font:800 28px/1 var(--disp);letter-spacing:.14em;text
 .srow .b{height:10px;border-radius:5px;background:var(--line);overflow:hidden}.srow .b i{display:block;height:100%;transition:width .6s}
 .srow .v{font-family:var(--mono);text-align:right}
 [hidden]{display:none!important}
-@media (max-width:1099px){
+@media (max-aspect-ratio: 6/5), (max-width: 699px){
  html,body{height:auto;overflow:auto}
  #stage{position:static;width:auto;height:auto;transform:none;display:flex;flex-direction:column}
  header{flex-wrap:wrap;gap:12px 20px;padding:14px 16px;position:sticky;top:0;z-index:3}
@@ -145,7 +145,7 @@ section h2{margin:0 0 12px;font:800 28px/1 var(--disp);letter-spacing:.14em;text
 #card .wake .b{width:360px;height:6px;border-radius:3px;background:rgba(255,255,255,.12);overflow:hidden}
 #card .wake .b i{display:block;height:100%;width:0;background:#9DB4FF}
 /* transitions take over the header strip so the ring, arrows and board stay visible */
-@media (min-width:1100px){
+@media (min-aspect-ratio: 1201/1000) and (min-width: 700px){
  #card{inset:0 0 auto 0;height:112px;flex-direction:row;justify-content:flex-start;gap:28px;padding:0 48px;text-align:left;box-shadow:0 2px 0 var(--gold)}
  #card .icon{width:64px;height:64px;flex:none}#card h1{font-size:76px;white-space:nowrap}
  #card .line{font-size:24px;max-width:none;flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
@@ -228,8 +228,13 @@ function frame(){
 }
 requestAnimationFrame(frame);
 function esc(t){return String(t??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]))}
-function fit(){const st=$('stage');if(innerWidth<1100){st.style.transform='';return}const s=Math.min(innerWidth/1920,innerHeight/1080);st.style.transform='translate(-50%,-50%) scale('+s+')'}
-addEventListener('resize',fit);fit();
+const STACK=matchMedia('(max-aspect-ratio: 6/5), (max-width: 699px)'),SAFE=+(new URLSearchParams(location.search).get('safe')||0);
+/* safe=5 shrinks the stage 5% for TVs that overscan and crop the edges */
+function fit(){const st=$('stage');if(STACK.matches){st.style.transform='';return}const s=Math.min(innerWidth/1920,innerHeight/1080)*(1-SAFE/100);st.style.transform='translate(-50%,-50%) scale('+s+')'}
+addEventListener('resize',fit);STACK.addEventListener('change',fit);fit();
+/* TV mode: F toggles fullscreen and the pointer hides when idle */
+addEventListener('keydown',e=>{if(e.key==='f'||e.key==='F'){document.fullscreenElement?document.exitFullscreen():document.documentElement.requestFullscreen().catch(()=>{})}});
+let idleT;addEventListener('mousemove',()=>{document.body.style.cursor='';clearTimeout(idleT);idleT=setTimeout(()=>document.body.style.cursor='none',2500)});
 function team(s){const d=meta[s]||{};return d.house?'house · '+d.house:(d.team||'Seat '+s)}
 function name(s){return 'Seat '+s+' · '+team(s)}
 function tint(s){const d=meta[s]||{};return TINT[d.role]||'var(--dim)'}
