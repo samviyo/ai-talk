@@ -72,7 +72,9 @@ section h2{margin:0 0 12px;font:800 28px/1 var(--disp);letter-spacing:.14em;text
 .bubble .chat{font-size:25px;line-height:1.3}
 .sys{font:18px/1.35 var(--mono);color:var(--dim);animation:in .4s}.sys.death{color:var(--wolf-soft)}
 @keyframes in{from{opacity:0;transform:translateY(10px)}}
-#den{background:#1A1014;border-top-color:#3A1E24;height:210px;flex:none}
+#den{background:#1A1014;border-top-color:#3A1E24;height:170px;flex:none}
+#night{background:#0F1424;border-top-color:#1F2A48;height:150px;flex:none}#night h2{color:#9DB4FF}
+#nightfeed{display:flex;flex-direction:column;gap:8px;overflow:hidden;justify-content:flex-end}#nightfeed div{font:19px/1.35 var(--mono);color:#B8C4E6;animation:in .4s}#nightfeed b{color:var(--fg)}
 #den h2{color:var(--wolf-soft)}
 #denfeed,#shopfeed{display:flex;flex-direction:column;gap:8px;overflow:hidden;justify-content:flex-end}
 #denfeed div{font-size:21px;animation:in .4s}#denfeed b{color:var(--wolf-soft)}#denfeed .sys{color:#C9A0A6}
@@ -102,7 +104,7 @@ section h2{margin:0 0 12px;font:800 28px/1 var(--disp);letter-spacing:.14em;text
  aside{border-left:0;border-top:1px solid var(--line)}
  section{padding:14px 16px}section:first-child{flex:none}
  #board{max-height:60vh;overflow-y:auto;justify-content:flex-start}
- #den,#shop,#spend{height:auto}
+ #den,#night,#shop,#spend{height:auto}
  section h2{font-size:20px}
  .bubble .chat{font-size:18px}.post{grid-template-columns:38px 1fr}.post .av{width:38px;height:38px;font-size:20px}
  #denfeed div,.buy,.srow{font-size:16px}.srow{grid-template-columns:110px 1fr 76px}
@@ -168,7 +170,8 @@ section h2{margin:0 0 12px;font:800 28px/1 var(--disp);letter-spacing:.14em;text
   <div id="center"><h3>Most accused</h3><div id="accused" style="width:100%;display:flex;flex-direction:column;gap:12px"></div></div></div></main>
  <aside>
   <section><h2>Message board</h2><div id="board"></div></section>
-  <section id="den"><h2>Wolf den · audience only</h2><div id="denfeed"></div></section>
+  <section id="den"><h2>Wolf den · only wolves see this</h2><div id="denfeed"></div></section>
+  <section id="night"><h2>Night moves · audience only</h2><div id="nightfeed"></div></section>
   <section id="shop" hidden><h2>Power-ups · secret from bots</h2><div id="shopfeed"></div></section>
   <section id="spend"><h2 id="spendh">Spend vs budget</h2><div id="spendrows"></div></section>
  </aside>
@@ -235,6 +238,7 @@ function post(p){
   $('board').appendChild(el);trim($('board'),40);flash(p.seat);
   if(p.accuse!=null){accuse[p.accuse]=(accuse[p.accuse]||0)+1;drawAccused()}
 }
+function nightLog(html){const el=document.createElement('div');el.innerHTML=html;$('nightfeed').appendChild(el);trim($('nightfeed'),5)}
 function den(html){const el=document.createElement('div');el.innerHTML=html;$('denfeed').appendChild(el);trim($('denfeed'),8)}
 function drawAccused(){
   const rows=Object.entries(accuse).filter(([s])=>meta[s]&&meta[s].alive!==false).sort((a,b)=>b[1]-a[1]).slice(0,4);
@@ -311,7 +315,7 @@ function result(e){
 function reset(m){
   budget=m.budget_usd||budget;meta={};accuse={};badges={};whispers=[];stats={posts:0,buys:0};timeline=[];outcome=[];lastPhase=null;
   layout(m.seats);m.seat_info.forEach(d=>{meta[d.seat]=d;render(d.seat)});
-  $('board').innerHTML='';$('denfeed').innerHTML='';$('shopfeed').innerHTML='';$('shop').hidden=true;
+  $('board').innerHTML='';$('denfeed').innerHTML='';$('nightfeed').innerHTML='';$('shopfeed').innerHTML='';$('shop').hidden=true;
   queue=[];['card','count','result'].forEach(k=>$(k).classList.remove('show'));busy=false;
   live=everLive;counts();drawAccused();drawSpend();drawLines();
   sys('Game '+m.game+' · '+m.seats+' seats');
@@ -323,8 +327,9 @@ function onEvent(e){
       sys({night:'🌙 Night '+e.day,day_discussion:'☀️ Day '+e.day+' · round '+e.round,day_vote:'🗳️ Day '+e.day+' · vote'}[e.phase]||e.phase)}break;
     case 'posts_revealed':e.posts.forEach(post);break;
     case 'wolf_chat':den('<b>Seat '+e.seat+'</b> '+esc(e.msg));break;
-    case 'seer_result':den('<span class="sys">Seer '+e.seer+' checked seat '+e.seat+': <b>'+esc(e.role)+'</b></span>');break;
-    case 'night_result':if(e.kill_target!=null)den('<span class="sys">Wolves targeted seat '+e.kill_target+(e.save_target!=null?' · doctor guarded seat '+e.save_target:'')+(e.killed==null?' · <b>saved</b>':'')+'</span>');break;
+    case 'seer_result':nightLog('🔮 Seer '+e.seer+' checked seat '+e.seat+': <b>'+esc(e.role)+'</b>');break;
+    case 'night_result':if(e.kill_target!=null)den('<span class="sys">Pack chose seat '+e.kill_target+'</span>');
+      if(e.save_target!=null)nightLog('🩺 Doctor guarded seat '+e.save_target+(e.killed==null&&e.kill_target===e.save_target?' · <b>saved them</b>':''));break;
     case 'vote_tally':countReveal(e);break;
     case 'death':{const d=meta[e.seat]=meta[e.seat]||{};d.alive=false;d.role=e.role;render(e.seat);flash(e.seat);counts();delete badges[e.seat];
       const txt=esc(name(e.seat))+(e.cause==='night'?' was killed in the night':' was voted out');
