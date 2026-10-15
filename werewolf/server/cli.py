@@ -1,0 +1,211 @@
+"""ww CLI: serve, table, tokens, final."""
+
+from __future__ import annotations
+
+import argparse
+import asyncio
+import os
+import sys
+import tomllib
+from pathlib import Path
+
+import werewolf.server  # noqa: F401
+
+from werewolf.engine import Config
+
+from .llm import Prices
+from .state import AppState, DEFAULT_PRICES as _FALLBACK_PRICES
+
+FORMATS = {
+    "practice": dict(seats=7, wolves=2, discussion_rounds=2, max_days=5),
+    "final": dict(seats=12, wolves=3, discussion_rounds=1, max_days=6),
+}
+
+
+def _load_prices() -> Prices:
+    path = Path("prices.toml")
+    if path.exists():
+        return Prices.load(path)
+    return Prices(
+        input={m: v["input"] for m, v in _FALLBACK_PRICES.items()},
+        output={m: v["output"] for m, v in _FALLBACK_PRICES.items()},
+    )
+
+
+def _load_teams() -> dict[str, str] | None:
+    path = Path("teams.toml")
+    if not path.exists():
+        return None
+    raw = tomllib.loads(path.read_text())
+    return {name: v["bifrost_key_env"] for name, v in raw.get("teams", {}).items()}
+
+
+def build_state(args: argparse.Namespace) -> AppState:
+    fmt = FORMATS[args.format]
+    config = Config(
+        seats=args.seats or fmt["seats"],
+        wolves=fmt["wolves"],
+        discussion_rounds=fmt["discussion_rounds"],
+        max_days=fmt["max_days"],
+        seed=args.seed,
+    )
+    return AppState(
+        config=config,
+        n_tables=args.tables,
+        budget_usd=args.budget_usd,
+        window_s=args.window_s,
+        runs_dir=Path(args.runs_dir),
+        prices=_load_prices(),
+        fake_llm=args.fake_llm,
+        base_url=os.environ.get("BIFROST_BASE_URL"),
+        teams_toml=_load_teams(),
+    )
+
+
+def _print_tokens(state: AppState) -> None:
+    print(f"operator token: {state.operator_token}", flush=True)
+    for table in state.tables:
+        print(f"{table.name}:", flush=True)
+        for st in table.seats:
+            print(f"  seat {st.seat} ({st.team}): {st.token}", flush=True)
+
+
+def _write_tokens_file(state: AppState, runs_dir: Path) -> Path:
+    """So `ww table` and humans can recover tokens without scraping stdout."""
+    import json
+
+    runs_dir.mkdir(parents=True, exist_ok=True)
+    path = runs_dir / "tokens.json"
+    path.write_text(
+        json.dumps(
+            {
+                "operator": state.operator_token,
+                "tables": {
+                    t.name: [st.token for st in t.seats] for t in state.tables
+                },
+            },
+            indent=1,
+        )
+    )
+    return path
+
+
+def cmd_serve(args: argparse.Namespace) -> int:
+    import uvicorn
+
+    from .app import create_app
+
+    state = build_state(args)
+    tokens_path = _write_tokens_file(state, Path(args.runs_dir))
+    if not args.quiet:
+        _print_tokens(state)
+        print(f"tokens file: {tokens_path}", flush=True)
+    app = create_app(state)
+    uvicorn.run(app, host=args.host, port=args.port, log_level="warning")
+    return 0
+
+
+def cmd_tokens(args: argparse.Namespace) -> int:
+    import json
+
+    path = Path(args.token_file or str(Path(args.runs_dir) / "tokens.json"))
+    if path.exists():
+        data = json.loads(path.read_text())
+        print(f"operator token: {data['operator']}")
+        for name, toks in data["tables"].items():
+            print(f"{name}:")
+            for s, tok in enumerate(toks):
+                print(f"  seat {s}: {tok}")
+        return 0
+    state = build_state(args)
+    _print_tokens(state)
+    return 0
+
+
+def cmd_table(args: argparse.Namespace) -> int:
+    from werewolf.server import patch_mcp_client_compat
+
+    patch_mcp_client_compat()  # housebots' runner predates mcp 2.x
+    from werewolf.housebots.runner import run_bot  # noqa: PLC0415
+
+    brains = [b.strip() for b in args.bots.split(",") if b.strip()]
+    if not brains:
+        raise SystemExit("--bots lists at least one brain")
+
+    async def _run() -> int:
+        import json
+
+        token_file = args.token_file or str(Path(args.runs_dir) / "tokens.json")
+        tokens = json.loads(Path(token_file).read_text())["tables"][
+            f"table{args.table}"
+        ]
+        tasks = [
+            run_bot(args.server, tokens[i], brain, args.seed + i)
+            for i, brain in enumerate(brains)
+        ]
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        for i, r in enumerate(results):
+            print(f"seat {i} ({brains[i]}): {r}")
+        return 0
+
+    return asyncio.run(_run())
+
+
+def cmd_final(args: argparse.Namespace) -> int:
+    from .final import run_final
+
+    return asyncio.run(
+        run_final(
+            Path(args.toml), check=args.check, port=args.port,
+            budget_usd=args.budget_usd,
+        )
+    )
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(prog="ww")
+    sub = parser.add_subparsers(dest="cmd", required=True)
+
+    def common(p: argparse.ArgumentParser) -> None:
+        p.add_argument("--format", choices=sorted(FORMATS), default="practice")
+        p.add_argument("--seats", type=int, default=0)
+        p.add_argument("--seed", type=int, default=1)
+        p.add_argument("--tables", type=int, default=1)
+        p.add_argument("--budget-usd", type=float, default=0.50)
+        p.add_argument("--window-s", type=float, default=20.0)
+        p.add_argument("--runs-dir", default="runs")
+        p.add_argument("--fake-llm", action="store_true")
+
+    p_serve = sub.add_parser("serve")
+    common(p_serve)
+    p_serve.add_argument("--host", default="127.0.0.1")
+    p_serve.add_argument("--port", type=int, default=8000)
+    p_serve.add_argument("--quiet", action="store_true")
+    p_serve.set_defaults(func=cmd_serve)
+
+    p_tokens = sub.add_parser("tokens")
+    p_tokens.add_argument("--token-file", default="")
+    common(p_tokens)
+    p_tokens.set_defaults(func=cmd_tokens)
+
+    p_table = sub.add_parser("table")
+    p_table.add_argument("--server", required=True)
+    p_table.add_argument("--table", type=int, default=1)
+    p_table.add_argument("--bots", required=True)
+    p_table.add_argument("--token-file", default="")
+    common(p_table)
+    p_table.set_defaults(func=cmd_table)
+
+    p_final = sub.add_parser("final")
+    p_final.add_argument("toml")
+    p_final.add_argument("--check", action="store_true")
+    p_final.add_argument("--port", type=int, default=8000)
+    p_final.add_argument("--budget-usd", type=float, default=0.50)
+    p_final.set_defaults(func=cmd_final)
+
+    args = parser.parse_args()
+    return args.func(args)
+
+
+if __name__ == "__main__":
+    sys.exit(main())

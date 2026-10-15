@@ -1,0 +1,7 @@
+# Copy to teams.toml. Each team's Bifrost virtual key lives in a server-process
+# env var; bots never see it. Without teams.toml, every seat uses BIFROST_API_KEY.
+[teams.wolfpack]
+bifrost_key_env = "BIFROST_KEY_WOLFPACK"
+
+[teams.silverbullet]
+bifrost_key_env = "BIFROST_KEY_SILVERBULLET"
