@@ -144,6 +144,15 @@ section h2{margin:0 0 12px;font:800 28px/1 var(--disp);letter-spacing:.14em;text
 #card .wake{display:flex;align-items:center;gap:18px;font-size:28px;color:var(--dim);margin-top:24px}
 #card .wake .b{width:360px;height:6px;border-radius:3px;background:rgba(255,255,255,.12);overflow:hidden}
 #card .wake .b i{display:block;height:100%;width:0;background:#9DB4FF}
+/* transitions take over the header strip so the ring, arrows and board stay visible */
+@media (min-width:1100px){
+ #card{inset:0 0 auto 0;height:112px;flex-direction:row;justify-content:flex-start;gap:28px;padding:0 48px;text-align:left;box-shadow:0 2px 0 var(--gold)}
+ #card .icon{width:64px;height:64px;flex:none}#card h1{font-size:76px;white-space:nowrap}
+ #card .line{font-size:24px;max-width:none;flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+ #card .rolechip{font-size:22px;padding:2px 10px}
+ #card .left{font-size:28px;gap:14px;flex:none}#card .wake{margin:0;font-size:18px;flex:none}#card .wake .b{width:140px}
+}
+}
 @keyframes rise{from{opacity:0;transform:translateY(28px)}}
 #count{background:#0F0D08;padding:72px 96px;display:flex;flex-direction:column;gap:44px}
 #count .top{display:flex;align-items:baseline;justify-content:space-between}
@@ -200,7 +209,7 @@ const CARD_MS=4500,COUNT_MS=6500;
 let N=0,budget=0.5,meta={},els={},pos={},accuse={},badges={},whispers=[];
 let held=0,live=false,everLive=false,lastPhase=null,outcome=[],queue=[],busy=false,curDay=1;
 let stats={posts:0,buys:0},timeline=[];
-let floor={speaking:null,queue:[]},acted=new Set(),onblock=new Set(),tallies={};
+let sawReveal=false,floor={speaking:null,queue:[]},acted=new Set(),onblock=new Set(),tallies={};
 let clk={turn:null,end:0,win:1,heldAt:false},turnSeq=0;
 /* the bar is driven per frame from a local deadline, so it drains smoothly and snaps full on a new turn */
 function clockTick(m){
@@ -317,7 +326,7 @@ function card(e){
   if(!live||(e.phase===lastPhase&&e.phase!=='day_discussion')){lastPhase=e.phase;return}
   const prev=lastPhase;lastPhase=e.phase;const[w,v]=counts();
   const left='<div class="left"><span style="color:var(--wolf)">'+w+' wolves</span><span style="color:#4A5260">·</span><span style="color:var(--villager)">'+v+' village</span></div>';
-  const out=outcome.map(o=>'<div class="line">'+o+'</div>').join('');outcome=[];
+  const out=outcome.length?'<div class="line">'+outcome.join(' · ')+'</div>':'';outcome=[];
   const wake=t=>'<div class="wake"><div class="b"><i></i></div><span>'+t+'</span></div>';
   if(e.phase==='night')show({kind:'card',cls:'night',html:MOON+'<h1>'+(e.day===1?'Night 1':'Night falls')+'</h1>'+(out||'<div class="line">The village sleeps. The wolves wake.</div>')+left+wake('Wolves wake soon')});
   else if(e.phase==='day_discussion'&&prev==='night')show({kind:'card',cls:'day',html:SUN+'<h1>Day '+e.day+'</h1>'+(out||'<div class="line">Everyone survived the night</div>')+left+wake('Discussion opens soon')});
@@ -334,7 +343,7 @@ function countReveal(e){
     +'</div><div class="tot" style="color:'+(String(e.eliminated)===t?'var(--gold)':'var(--fg)')+'">'+tot+'</div></div>'});
   html+='</div><div class="verdict">'+(e.eliminated!=null?esc(name(e.eliminated))+' is voted out.':'Tie. No one is eliminated.')
     +(dbl?' <span style="color:var(--gold)">Seat '+dbl.seat+' paid to count twice.</span>':'')+'</div>';
-  show({kind:'count',html});
+  if(!sawReveal)show({kind:'count',html});sawReveal=false;
   sys('🗳️ '+rows.map(([t,,tot])=>'seat '+t+': '+tot).join(' · ')+(e.eliminated!=null?' ⇒ <b>'+esc(name(e.eliminated))+'</b> out':' ⇒ no one'));
 }
 function result(e){
@@ -381,7 +390,7 @@ function onEvent(e){
     case 'vote_skipped':sys('🕊️ No nominations stood · no vote today'+(e.silent&&e.silent.length?' · silent: seats '+e.silent.join(', '):''));
       spot(null,'No vote today',null,true);break;
     case 'ballot_cast':case 'night_acted':acted.add(e.seat);render(e.seat);break;
-    case 'ballot_reveal':arrow(e.seat,e.target,(e.weight||1)>1?'var(--gold)':'var(--fg)',(e.weight||1)>1?10:5);
+    case 'ballot_reveal':sawReveal=true;arrow(e.seat,e.target,(e.weight||1)>1?'var(--gold)':'var(--fg)',(e.weight||1)>1?10:5);
       tallies=e.tally||tallies;acted.delete(e.seat);renderAll();flash(e.seat);
       spot(e.seat,'votes seat '+e.target+((e.weight||1)>1?' ×2':''),null,true);break;
     case 'night_beat':{const T=e.target;
