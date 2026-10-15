@@ -9,7 +9,11 @@ PAGE = """<!doctype html>
 *{box-sizing:border-box}
 body{margin:0;background:var(--bg);color:var(--fg);font:18px/1.35 -apple-system,system-ui,sans-serif;
  height:100vh;display:grid;grid-template-columns:minmax(0,1.25fr) minmax(0,1fr);grid-template-rows:auto minmax(0,1fr);overflow:hidden;transition:background .8s}
-body.night{background:#070a18}
+body::before,body::after{content:"";position:fixed;inset:0;pointer-events:none;z-index:-1;transition:opacity 2.5s ease}
+body::before{background:radial-gradient(ellipse at 50% -20%,rgba(242,193,78,.22),transparent 60%),linear-gradient(#131a26,#0b0e14);opacity:1}
+body::after{background:radial-gradient(ellipse at 80% 0%,rgba(120,140,255,.18),transparent 55%),linear-gradient(#04061a,#070a18);opacity:0}
+body.night::before{opacity:0} body.night::after{opacity:1}
+body{background:transparent}
 header{grid-column:1/3;display:flex;align-items:center;gap:24px;padding:14px 24px;border-bottom:1px solid var(--line)}
 #phase{font-size:34px;font-weight:800;letter-spacing:.02em}
 #clock{flex:1;height:10px;background:#1c2230;border-radius:5px;overflow:hidden}
@@ -57,6 +61,17 @@ section h2{margin:0;padding:8px 16px;font-size:13px;letter-spacing:.12em;text-tr
  background:rgba(5,7,12,.86);z-index:5;text-align:center}
 #banner h1{font-size:96px;margin:0} #banner p{font-size:26px;color:var(--dim)}
 #banner.show{display:flex}
+#card{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;flex-direction:column;z-index:4;
+ pointer-events:none;opacity:0;transition:opacity .9s ease;text-align:center}
+#card.show{opacity:1}
+#card.night{background:radial-gradient(circle at 50% 40%,rgba(26,34,68,.97),rgba(3,4,12,.98))}
+#card.day{background:radial-gradient(circle at 50% 30%,rgba(90,64,18,.95),rgba(12,10,6,.97))}
+#card.vote{background:radial-gradient(circle at 50% 40%,rgba(60,48,10,.95),rgba(8,8,6,.97))}
+#card .icon{font-size:140px;line-height:1;animation:rise 1.4s ease}
+#card h1{font-size:88px;margin:10px 0 0;letter-spacing:.02em;animation:rise 1.6s ease}
+#card p{font-size:30px;color:#d8d8d8;margin:16px 0 0;max-width:70vw;animation:rise 2s ease}
+#card p.big{font-size:40px;font-weight:700}
+@keyframes rise{from{opacity:0;transform:translateY(24px)}}
 </style></head><body>
 <header><div id="phase">connecting…</div><div id="clock"><div id="clockbar"></div></div><div id="secs"></div>
 <div id="tally"></div></header>
@@ -66,12 +81,33 @@ section h2{margin:0;padding:8px 16px;font-size:13px;letter-spacing:.12em;text-tr
  <section id="wolfsec"><h2>Wolf den (audience only)</h2><div class="feed" id="wolf"></div></section>
  <section><h2>Spend by team</h2><div id="spend"></div></section>
 </div>
+<div id="card"><div class="icon" id="cardi"></div><h1 id="cardh"></h1><p class="big" id="cardp"></p><p id="cards"></p></div>
 <div id="banner"><h1 id="bannerh"></h1><p id="bannerp"></p></div>
 <script>
 const op=new URLSearchParams(location.search).get('op')||'';
 const $=id=>document.getElementById(id);
 const circle=$('circle'),svg=$('arrows'),board=$('board'),wolf=$('wolf');
 let N=0,budget=0.5,meta={},els={},pos={};
+let everLive=false, live=false, outcome=[], lastPhase=null, cards=[], cardBusy=false;
+const CARD_MS=4500;
+function showCard(c){ cards=[c]; if(!cardBusy) nextCard(); }
+function nextCard(){
+  const c=cards.shift(), el=$('card'); if(!c){cardBusy=false; return}
+  cardBusy=true; el.className=c.cls;
+  $('cardi').textContent=c.icon; $('cardh').textContent=c.title; $('cardp').innerHTML=c.line||''; $('cards').innerHTML=c.sub||'';
+  requestAnimationFrame(()=>el.classList.add('show'));
+  setTimeout(()=>{el.classList.remove('show'); setTimeout(nextCard,900)}, CARD_MS);
+}
+function aliveCount(){let w=0,v=0; for(const s in meta){ if(meta[s].alive!==false){ meta[s].role==='werewolf'?w++:v++ } } return [w,v]}
+function transition(e){
+  if(!live || e.phase===lastPhase && e.phase!=='day_discussion') { lastPhase=e.phase; return }
+  const prev=lastPhase; lastPhase=e.phase; const [w,v]=aliveCount();
+  const left='🐺 '+w+' wolves · 🏡 '+v+' villagers remain';
+  const out=outcome.join('<br>'); outcome=[];
+  if(e.phase==='night') showCard({cls:'night',icon:'🌙',title:'Night '+e.day,line:out||(e.day===1?'The village sleeps. The wolves wake.':''),sub:left});
+  else if(e.phase==='day_discussion' && prev==='night') showCard({cls:'day',icon:'☀️',title:'Day '+e.day,line:out||'🌅 Everyone survived the night',sub:left});
+  else if(e.phase==='day_vote') showCard({cls:'vote',icon:'🗳️',title:'The village votes',line:'Day '+e.day,sub:left});
+}
 const ROLE_ICON={werewolf:'🐺',seer:'🔮',doctor:'🩺',villager:'🧑‍🌾'};
 function esc(t){return String(t??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]))}
 function name(s){const d=meta[s]||{};return 'Seat '+s+(d.team?' · '+d.team:'')}
@@ -130,10 +166,11 @@ function handle(m){
   if(m.kind==='init'){
     budget=m.budget_usd||budget; meta={}; layout(m.seats);
     m.seat_info.forEach(d=>{meta[d.seat]=d; render(d.seat)});
-    board.innerHTML=''; wolf.innerHTML=''; $('banner').classList.remove('show');
+    board.innerHTML=''; wolf.innerHTML=''; $('banner').classList.remove('show'); live=everLive; outcome=[]; lastPhase=null; if(live) add(board,'🎬 New game','sys');
     add(board,'Game '+m.game+' · '+m.seats+' seats','sys'); tally(); spendPanel(); return;
   }
   if(m.kind==='tick'){
+    if(!live){ live=everLive=true; outcome=[] }
     const frac=m.window_s?m.remaining_s/m.window_s:0;
     $('clockbar').style.width=(100*frac)+'%'; $('secs').textContent=m.pending.length?Math.ceil(m.remaining_s)+'s':'';
     const pend=new Set(m.pending), think=new Set(m.thinking);
@@ -147,7 +184,7 @@ function handle(m){
 }
 function onEvent(e){
   switch(e.kind){
-    case 'phase': if(e.phase!=='over'){ setPhase(e.phase,e.day,e.round);
+    case 'phase': if(e.phase!=='over'){ transition(e); setPhase(e.phase,e.day,e.round);
       add(board,{night:'🌙 Night '+e.day+' falls',day_discussion:'☀️ Day '+e.day+' · discussion round '+e.round,day_vote:'🗳️ Day '+e.day+' · vote'}[e.phase]||e.phase,'sys')} break;
     case 'posts_revealed': e.posts.forEach(p=>{ add(board, who(p.seat)+esc(p.chat)
       +(p.claimed_role?'<span class="tag">claims '+esc(p.claimed_role)+'</span>':'')
@@ -160,8 +197,9 @@ function onEvent(e){
       add(board,'🗳️ '+(cast.length?cast.map(b=>b.seat+'→'+b.target).join('  '):'no votes cast')
       +(e.eliminated!=null?' ⇒ <b>'+esc(name(e.eliminated))+'</b> out':' ⇒ no one'),'vote'); arrows(cast); break; }
     case 'death': { const d=meta[e.seat]=meta[e.seat]||{}; d.alive=false; d.role=e.role; render(e.seat); flash(e.seat); tally();
+      outcome.push((e.cause==='night'?'🩸 ':'⚖️ ')+esc(name(e.seat))+(e.cause==='night'?' was killed in the night':' was voted out')+' — <b>'+esc(e.role)+'</b>');
       add(board,(e.cause==='night'?'🌙 ':'⚖️ ')+esc(name(e.seat))+(e.cause==='night'?' was killed in the night':' was voted out')+' — '+esc(e.role),'death'); break; }
-    case 'no_death': add(board,e.cause==='night'?'🌅 Nobody died last night':'⚖️ No one was eliminated','sys'); break;
+    case 'no_death': outcome.push(e.cause==='night'?'🌅 Nobody died last night':'⚖️ The village could not agree — no one was eliminated'); add(board,e.cause==='night'?'🌅 Nobody died last night':'⚖️ No one was eliminated','sys'); break;
     case 'result': { const w=e.result==='wolves'?'🐺 Wolves win':e.result==='village'?'🏡 Village wins':'🤝 Draw';
       $('phase').textContent=w; $('bannerh').textContent=w; $('secs').textContent=''; $('clockbar').style.width='0';
       $('bannerp').textContent='Wolves: '+Object.keys(meta).filter(s=>meta[s].role==='werewolf').map(name).join(', ');
