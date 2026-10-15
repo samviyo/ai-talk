@@ -200,8 +200,7 @@ class Dispatcher:
                 now = time.monotonic()
                 remaining = deadline - now
                 if table.frozen:
-                    # No release is scheduled; only a notify (unfreeze) ends this.
-                    remaining = max(0.01, remaining)
+                    pass  # only a notify (unfreeze) or the caller's budget ends this
                 elif table.holding():
                     # Wake at release even if the caller's wait budget is longer.
                     remaining = max(0.01, min(remaining, table.release_at() - now + 0.01))
@@ -210,7 +209,8 @@ class Dispatcher:
                 try:
                     await asyncio.wait_for(table.cond.wait(), timeout=remaining)
                 except TimeoutError:
-                    if table.holding() or time.monotonic() < deadline:
+                    # Never outlive the caller's budget: clients' HTTP read timeout is ~5s.
+                    if time.monotonic() < deadline:
                         continue  # re-check after a hold boundary
                     return {"status": "waiting"}
 

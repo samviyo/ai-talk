@@ -564,3 +564,19 @@ async def test_no_fallback_during_large_transition(tmp_path: Path):
         table.game.act(wolves[0], NightKill(target))
         table.note_window_locked()
         assert table.game.pending().get(wolves[0]) is None
+
+
+async def test_wait_for_turn_returns_within_cap_during_long_hold(tmp_path: Path):
+    # A hold longer than a client's 5s HTTP read timeout must still return "waiting" in time.
+    import time as _time
+
+    from .conftest import mcp_call
+
+    srv = await start_server(tmp_path, seed=3, window_s=5.0, transition_s=12.0)
+    try:
+        t0 = _time.monotonic()
+        r = await mcp_call(srv.url, srv.token(0), "wait_for_turn", {"timeout_s": 25})
+        assert r.get("status") == "waiting"
+        assert _time.monotonic() - t0 < 4.5
+    finally:
+        await srv.stop()
