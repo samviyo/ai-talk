@@ -36,8 +36,8 @@ header{grid-column:1/3;display:flex;align-items:center;gap:40px;padding:0 48px;b
 main{position:relative;display:flex;align-items:center;justify-content:center}
 #ringwrap{position:relative;width:960px;height:940px}
 #ringline{position:absolute;inset:140px;border-radius:50%;border:1px dashed var(--ring)}
-#lines{position:absolute;inset:0;width:100%;height:100%;pointer-events:none}
-#center{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);width:420px;text-align:center;display:flex;flex-direction:column;align-items:center;gap:14px}
+#lines,#arrows{position:absolute;inset:0;width:100%;height:100%;pointer-events:none;z-index:2}
+#center{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);width:600px;text-align:center;display:flex;flex-direction:column;align-items:center;gap:14px}
 #center h3{margin:0;font:600 26px/1 var(--disp);letter-spacing:.18em;text-transform:uppercase;color:var(--dim)}
 .acc{width:100%;display:grid;grid-template-columns:120px 1fr 40px;align-items:center;gap:14px;font-size:24px}
 .acc .b{height:16px;border-radius:8px;background:var(--line);overflow:hidden}.acc .b i{display:block;height:100%;background:var(--gold);border-radius:8px;transition:width .6s}
@@ -54,6 +54,21 @@ main{position:relative;display:flex;align-items:center;justify-content:center}
 .seat.pending{box-shadow:0 0 0 3px var(--gold)}
 .seat.thinking{animation:pulse 1.1s infinite}
 @keyframes pulse{50%{box-shadow:0 0 22px 6px rgba(242,184,75,.55)}}
+.seat.speaking{box-shadow:0 0 0 4px var(--gold),0 0 40px 8px rgba(242,184,75,.45);transform:translate(-50%,-50%) scale(1.18);z-index:3}
+.seat.queued::after{content:attr(data-q);position:absolute;top:-12px;right:-12px;min-width:30px;height:30px;border-radius:15px;background:#3A2A12;color:var(--gold);font:800 20px/30px var(--disp);text-align:center}
+.seat.done::before{content:'✓';position:absolute;top:-12px;left:-12px;width:30px;height:30px;border-radius:15px;background:#12302C;color:var(--doctor);font:700 18px/30px var(--mono);text-align:center}
+.seat.onblock{outline:3px dashed var(--wolf-soft);outline-offset:6px}
+.seat .tally{position:absolute;bottom:-18px;left:50%;transform:translateX(-50%);background:var(--gold);color:var(--bg);font:900 26px/1 var(--disp);padding:4px 14px;border-radius:999px;animation:pop .35s both}
+#spot{width:600px;min-height:0;display:flex;flex-direction:column;align-items:center;gap:10px;transition:opacity .4s}
+#spot.idle{opacity:0}
+#center{z-index:3}#spot .say,#spot .who{text-shadow:0 0 12px var(--bg),0 0 24px var(--bg),0 0 4px var(--bg)}
+#spot .who{display:flex;align-items:center;gap:14px;font:800 30px/1 var(--disp);letter-spacing:.06em;text-transform:uppercase}
+#spot .who .av{width:52px;height:52px;border-radius:50%;display:flex;align-items:center;justify-content:center;font:900 30px/1 var(--disp);color:var(--bg)}
+#spot .say{font-size:34px;line-height:1.3;font-weight:500;text-wrap:balance}
+#spot .say.big{font:900 64px/1.05 var(--disp);text-transform:uppercase;letter-spacing:.02em}
+#spot .tags{display:flex;gap:8px;flex-wrap:wrap;justify-content:center}
+#upnext{font:20px/1 var(--mono);color:var(--dim);min-height:20px}
+#center.live h3,#center.live #accused{display:none!important}#spot.idle{display:none}
 .seat.dead{opacity:.32}.seat.dead .av{background:#4A5260!important}
 .seat.broke .bar i{background:var(--wolf)}.seat.broke .usd{color:var(--wolf);font-weight:600}
 .seat.flash{transform:translate(-50%,-50%) scale(1.12)}
@@ -72,9 +87,7 @@ section h2{margin:0 0 12px;font:800 28px/1 var(--disp);letter-spacing:.14em;text
 .bubble .chat{font-size:25px;line-height:1.3}
 .sys{font:18px/1.35 var(--mono);color:var(--dim);animation:in .4s}.sys.death{color:var(--wolf-soft)}
 @keyframes in{from{opacity:0;transform:translateY(10px)}}
-#den{background:#1A1014;border-top-color:#3A1E24;height:170px;flex:none}
-#night{background:#0F1424;border-top-color:#1F2A48;height:150px;flex:none}#night h2{color:#9DB4FF}
-#nightfeed{display:flex;flex-direction:column;gap:8px;overflow:hidden;justify-content:flex-end}#nightfeed div{font:19px/1.35 var(--mono);color:#B8C4E6;animation:in .4s}#nightfeed b{color:var(--fg)}
+#den{background:#1A1014;border-top-color:#3A1E24;height:210px;flex:none}
 #den h2{color:var(--wolf-soft)}
 #denfeed,#shopfeed{display:flex;flex-direction:column;gap:8px;overflow:hidden;justify-content:flex-end}
 #denfeed div{font-size:21px;animation:in .4s}#denfeed b{color:var(--wolf-soft)}#denfeed .sys{color:#C9A0A6}
@@ -104,7 +117,7 @@ section h2{margin:0 0 12px;font:800 28px/1 var(--disp);letter-spacing:.14em;text
  aside{border-left:0;border-top:1px solid var(--line)}
  section{padding:14px 16px}section:first-child{flex:none}
  #board{max-height:60vh;overflow-y:auto;justify-content:flex-start}
- #den,#night,#shop,#spend{height:auto}
+ #den,#shop,#spend{height:auto}
  section h2{font-size:20px}
  .bubble .chat{font-size:18px}.post{grid-template-columns:38px 1fr}.post .av{width:38px;height:38px;font-size:20px}
  #denfeed div,.buy,.srow{font-size:16px}.srow{grid-template-columns:110px 1fr 76px}
@@ -166,12 +179,11 @@ section h2{margin:0 0 12px;font:800 28px/1 var(--disp);letter-spacing:.14em;text
   <div class="counts"><span style="color:var(--wolf)"><svg width="34" height="34" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 4l3 6-2 6 7 5 7-5-2-6 3-6-6 3h-4z"/></svg><b id="nw">0</b> wolves</span>
    <span style="color:var(--villager)"><svg width="34" height="34" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 11l9-7 9 7v9H3z"/><path d="M10 20v-6h4v6"/></svg><b id="nv">0</b> village</span></div>
  </header>
- <main><div id="ringwrap"><div id="ringline"></div><svg id="lines" viewBox="0 0 960 940" aria-hidden="true"></svg>
-  <div id="center"><h3>Most accused</h3><div id="accused" style="width:100%;display:flex;flex-direction:column;gap:12px"></div></div></div></main>
+ <main><div id="ringwrap"><div id="ringline"></div><svg id="lines" viewBox="0 0 960 940" aria-hidden="true"></svg><svg id="arrows" viewBox="0 0 960 940" aria-hidden="true"><defs><marker id="ah" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="context-stroke"/></marker></defs><g id="arrowg"></g></svg>
+  <div id="center"><div id="spot" class="idle"></div><div id="upnext"></div><h3>Most accused</h3><div id="accused" style="width:100%;display:flex;flex-direction:column;gap:12px"></div></div></div></main>
  <aside>
   <section><h2>Message board</h2><div id="board"></div></section>
-  <section id="den"><h2>Wolf den · only wolves see this</h2><div id="denfeed"></div></section>
-  <section id="night"><h2>Night moves · audience only</h2><div id="nightfeed"></div></section>
+  <section id="den"><h2>Wolf den · audience only</h2><div id="denfeed"></div></section>
   <section id="shop" hidden><h2>Power-ups · secret from bots</h2><div id="shopfeed"></div></section>
   <section id="spend"><h2 id="spendh">Spend vs budget</h2><div id="spendrows"></div></section>
  </aside>
@@ -188,6 +200,7 @@ const CARD_MS=4500,COUNT_MS=6500;
 let N=0,budget=0.5,meta={},els={},pos={},accuse={},badges={},whispers=[];
 let held=0,live=false,everLive=false,lastPhase=null,outcome=[],queue=[],busy=false,curDay=1;
 let stats={posts:0,buys:0},timeline=[];
+let floor={speaking:null,queue:[]},acted=new Set(),onblock=new Set(),tallies={};
 let clk={turn:null,end:0,win:1,heldAt:false},turnSeq=0;
 /* the bar is driven per frame from a local deadline, so it drains smoothly and snaps full on a new turn */
 function clockTick(m){
@@ -218,12 +231,14 @@ function layout(n){
 }
 function render(s){
   const el=els[s],d=meta[s];if(!el||!d)return;
-  el.className='seat'+(d.role==='werewolf'&&d.alive!==false?' wolf':'')+(d.alive===false?' dead':'')+(d.broke?' broke':'')+(d.pending?' pending':'')+(d.thinking?' thinking':'');
+  el.className='seat'+(d.role==='werewolf'&&d.alive!==false?' wolf':'')+(d.alive===false?' dead':'')+(d.broke?' broke':'')+(d.pending?' pending':'')+(d.thinking?' thinking':'')+(floor.speaking==s?' speaking':'')+(floor.queue.includes(s)?' queued':'')+(acted.has(s)?' done':'')+(onblock.has(s)?' onblock':'');
+  el.dataset.q=floor.queue.indexOf(s)+1;
   const pct=Math.min(100,100*(d.spend||0)/budget),b=badges[s];
   el.innerHTML='<div class="av" style="background:'+tint(s)+'">'+s+'</div><div class="team">'+esc(team(s))+'</div>'
    +'<div class="role" style="color:'+tint(s)+'">'+esc(d.role||'?')+'</div>'
    +(b?'<div class="badge" style="background:'+b[1]+'">'+esc(b[0])+'</div>':'')
-   +'<div class="bar"><i style="width:'+pct+'%"></i></div><div class="usd">'+(d.broke?'BROKE · ':'')+'$'+(d.spend||0).toFixed(3)+'</div>';
+   +'<div class="bar"><i style="width:'+pct+'%"></i></div><div class="usd">'+(d.broke?'BROKE · ':'')+'$'+(d.spend||0).toFixed(3)+'</div>'
+   +(tallies[s]?'<div class="tally">'+tallies[s]+'</div>':'');
 }
 function flash(s){const el=els[s];if(!el)return;el.classList.add('flash');setTimeout(()=>el.classList.remove('flash'),600)}
 function counts(){let w=0,v=0;for(const s in meta){if(meta[s].alive!==false){meta[s].role==='werewolf'?w++:v++}}$('nw').textContent=w;$('nv').textContent=v;return[w,v]}
@@ -232,13 +247,34 @@ function sys(text,cls){const el=document.createElement('div');el.className='sys 
 function post(p){
   stats.posts++;
   const el=document.createElement('div');el.className='post';
-  const tags=(p.claimed_role?'<span class="tag claim">claims '+esc(p.claimed_role)+'</span>':'')+(p.accuse!=null?'<span class="tag accuse">accuses seat '+esc(p.accuse)+'</span>':'');
+  const tags=(p.claimed_role?'<span class="tag claim">claims '+esc(p.claimed_role)+'</span>':'')+(p.accuse!=null?'<span class="tag accuse">accuses seat '+esc(p.accuse)+'</span>':'')+(p.nominate!=null?'<span class="tag accuse">nominates seat '+esc(p.nominate)+'</span>':'')+(p.second!=null?'<span class="tag accuse">seconds seat '+esc(p.second)+'</span>':'');
   const chats=[p.chat,p.chat2].filter(Boolean).map(c=>'<div class="chat">'+esc(c)+'</div>').join('');
   el.innerHTML='<div class="av" style="background:'+tint(p.seat)+'">'+p.seat+'</div><div class="bubble"><div class="who"><b>'+esc(team(p.seat))+'</b>'+tags+'</div>'+chats+'</div>';
   $('board').appendChild(el);trim($('board'),40);flash(p.seat);
   if(p.accuse!=null){accuse[p.accuse]=(accuse[p.accuse]||0)+1;drawAccused()}
+  spot(p.seat,p.chat,tags);
+  const t=p.accuse??p.nominate??p.second;clearArrows();if(t!=null)arrow(p.seat,t,'var(--gold)');
 }
-function nightLog(html){const el=document.createElement('div');el.innerHTML=html;$('nightfeed').appendChild(el);trim($('nightfeed'),5)}
+/* centre spotlight: the one voice the room should be reading right now */
+function spot(seat,text,tags,big){
+  const el=$('spot');el.classList.remove('idle');$('center').classList.add('live');
+  el.innerHTML=(seat!=null?'<div class="who"><div class="av" style="background:'+tint(seat)+'">'+seat+'</div>'+esc(team(seat))+'</div>':'')
+   +(tags?'<div class="tags">'+tags+'</div>':'')+'<div class="say'+(big||String(text).length<48?' big':'')+'">'+esc(text)+'</div>';
+}
+function quiet(){$('spot').classList.add('idle');$('center').classList.remove('live');$('upnext').textContent=''}
+function arrow(from,to,color,width){
+  if(!pos[from]||!pos[to]||from==to)return;
+  let[x1,y1]=pos[from],[x2,y2]=pos[to];x1*=9.6;y1*=9.4;x2*=9.6;y2*=9.4;
+  const dx=x2-x1,dy=y2-y1,L=Math.hypot(dx,dy),k=80/L;
+  const l=document.createElementNS('http://www.w3.org/2000/svg','line');
+  l.setAttribute('x1',x1+dx*k);l.setAttribute('y1',y1+dy*k);l.setAttribute('x2',x2-dx*k);l.setAttribute('y2',y2-dy*k);
+  l.setAttribute('stroke',color);l.setAttribute('stroke-width',width||5);l.setAttribute('stroke-linecap','round');l.setAttribute('marker-end','url(#ah)');
+  l.style.strokeDasharray=L;l.style.strokeDashoffset=L;l.style.transition='stroke-dashoffset .6s ease-out';
+  $('arrowg').appendChild(l);requestAnimationFrame(()=>requestAnimationFrame(()=>l.style.strokeDashoffset=0));
+}
+function clearArrows(){$('arrowg').innerHTML=''}
+function renderAll(){for(const s in meta)render(+s)}
+function roleSeat(r){return Object.keys(meta).map(Number).filter(s=>meta[s].role===r&&meta[s].alive!==false)}
 function den(html){const el=document.createElement('div');el.innerHTML=html;$('denfeed').appendChild(el);trim($('denfeed'),8)}
 function drawAccused(){
   const rows=Object.entries(accuse).filter(([s])=>meta[s]&&meta[s].alive!==false).sort((a,b)=>b[1]-a[1]).slice(0,4);
@@ -315,22 +351,45 @@ function result(e){
 function reset(m){
   budget=m.budget_usd||budget;meta={};accuse={};badges={};whispers=[];stats={posts:0,buys:0};timeline=[];outcome=[];lastPhase=null;
   layout(m.seats);m.seat_info.forEach(d=>{meta[d.seat]=d;render(d.seat)});
-  $('board').innerHTML='';$('denfeed').innerHTML='';$('nightfeed').innerHTML='';$('shopfeed').innerHTML='';$('shop').hidden=true;
+  $('board').innerHTML='';$('denfeed').innerHTML='';$('shopfeed').innerHTML='';$('shop').hidden=true;
+  floor={speaking:null,queue:[]};acted=new Set();onblock=new Set();tallies={};clearArrows();quiet();
   queue=[];['card','count','result'].forEach(k=>$(k).classList.remove('show'));busy=false;
   live=everLive;counts();drawAccused();drawSpend();drawLines();
   sys('Game '+m.game+' · '+m.seats+' seats');
 }
 function onEvent(e){
   switch(e.kind){
-    case 'phase':turnSeq++;if(e.phase!=='over'){card(e);setPhase(e.phase,e.day,e.round);
+    case 'phase':turnSeq++;acted=new Set();floor={speaking:null,queue:[]};$('upnext').textContent='';if(e.phase!=='defence'){tallies={};clearArrows()}
+      if(e.phase==='night'){onblock=new Set();quiet()}
+      if(e.phase==='defence'&&e.seat!=null){spot(e.seat,'On the block · last words',null,true);floor={speaking:e.seat,queue:[]}}
+      renderAll();
+      if(e.phase!=='over'){card(e);setPhase(e.phase,e.day,e.round);
       if(e.phase==='day_discussion'&&e.round===1){accuse={};drawAccused()}
       sys({night:'🌙 Night '+e.day,day_discussion:'☀️ Day '+e.day+' · round '+e.round,day_vote:'🗳️ Day '+e.day+' · vote'}[e.phase]||e.phase)}break;
     case 'posts_revealed':e.posts.forEach(post);break;
     case 'wolf_chat':den('<b>Seat '+e.seat+'</b> '+esc(e.msg));break;
-    case 'seer_result':nightLog('🔮 Seer '+e.seer+' checked seat '+e.seat+': <b>'+esc(e.role)+'</b>');break;
-    case 'night_result':if(e.kill_target!=null)den('<span class="sys">Pack chose seat '+e.kill_target+'</span>');
-      if(e.save_target!=null)nightLog('🩺 Doctor guarded seat '+e.save_target+(e.killed==null&&e.kill_target===e.save_target?' · <b>saved them</b>':''));break;
-    case 'vote_tally':countReveal(e);break;
+    case 'seer_result':den('<span class="sys">Seer '+e.seer+' checked seat '+e.seat+': <b>'+esc(e.role)+'</b></span>');break;
+    case 'night_result':if(e.kill_target!=null)den('<span class="sys">Wolves targeted seat '+e.kill_target+(e.save_target!=null?' · doctor guarded seat '+e.save_target:'')+(e.killed==null?' · <b>saved</b>':'')+'</span>');break;
+    case 'vote_tally':countReveal(e);if(e.silent&&e.silent.length)sys('🤐 Stayed silent: seats '+e.silent.join(', '));break;
+    case 'floor':floor={speaking:e.speaking??null,queue:e.queue||[]};renderAll();
+      $('upnext').textContent=floor.queue.length?'Up next: '+floor.queue.map(s=>'seat '+s).join(' · '):'';break;
+    case 'cut_off':sys('✂️ Out of time · cut off: seats '+e.seats.join(', '));break;
+    case 'nomination':sys('📌 Seat '+e.seat+' nominates <b>seat '+e.target+'</b>');break;
+    case 'seconded':sys('✋ Seat '+e.seat+' seconds seat '+e.target);break;
+    case 'standing':onblock=new Set(e.targets);renderAll();sys('⚖️ On the block: <b>seats '+e.targets.join(', ')+'</b>');
+      spot(null,'On the block: '+e.targets.map(t=>'seat '+t).join(', '),null,true);break;
+    case 'vote_skipped':sys('🕊️ No nominations stood · no vote today'+(e.silent&&e.silent.length?' · silent: seats '+e.silent.join(', '):''));
+      spot(null,'No vote today',null,true);break;
+    case 'ballot_cast':case 'night_acted':acted.add(e.seat);render(e.seat);break;
+    case 'ballot_reveal':arrow(e.seat,e.target,(e.weight||1)>1?'var(--gold)':'var(--fg)',(e.weight||1)>1?10:5);
+      tallies=e.tally||tallies;acted.delete(e.seat);renderAll();flash(e.seat);
+      spot(e.seat,'votes seat '+e.target+((e.weight||1)>1?' ×2':''),null,true);break;
+    case 'night_beat':{const T=e.target;
+      if(e.step==='wolves'){roleSeat('werewolf').forEach(w=>arrow(w,T,'var(--wolf)'));spot(null,'The wolves pick seat '+T,null,true)}
+      else if(e.step==='doctor'){roleSeat('doctor').forEach(d=>arrow(d,T,'var(--doctor)'));spot(null,'The doctor guards seat '+T,null,true)}
+      else if(e.step==='seer'){arrow(e.seer,T,'var(--seer)');spot(null,'The seer checks seat '+T+': '+e.role,null,true)}
+      if(T!=null)flash(T);break}
+    case 'thought':den('<span class="sys">🧠 '+esc(team(e.seat))+':</span> '+esc(e.text));break;
     case 'death':{const d=meta[e.seat]=meta[e.seat]||{};d.alive=false;d.role=e.role;render(e.seat);flash(e.seat);counts();delete badges[e.seat];
       const txt=esc(name(e.seat))+(e.cause==='night'?' was killed in the night':' was voted out');
       outcome.push(txt+' — <span class="rolechip" style="background:'+(TINT[e.role]||'var(--dim)')+'">'+esc(e.role)+'</span>');
