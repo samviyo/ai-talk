@@ -58,6 +58,9 @@ main{position:relative;display:flex;align-items:center;justify-content:center}
 .seat.queued::after{content:attr(data-q);position:absolute;top:-12px;right:-12px;min-width:30px;height:30px;border-radius:15px;background:#3A2A12;color:var(--gold);font:800 20px/30px var(--disp);text-align:center}
 .seat.done::before{content:'✓';position:absolute;top:-12px;left:-12px;width:30px;height:30px;border-radius:15px;background:#12302C;color:var(--doctor);font:700 18px/30px var(--mono);text-align:center}
 .seat.owed .av{box-shadow:0 0 0 4px var(--bg),0 0 0 7px var(--wolf-soft);animation:pulse 1.1s infinite}
+.burst{position:absolute;font-size:44px;pointer-events:none;z-index:4;animation:burst 1.8s ease-out forwards}
+@keyframes burst{0%{opacity:0;transform:translate(-50%,-50%) scale(.4)}15%{opacity:1;transform:translate(-50%,-90%) scale(1.15)}100%{opacity:0;transform:translate(-50%,-190%) scale(1)}}
+.post .rx{display:flex;gap:10px;margin-top:6px;font:19px/1 var(--mono);color:var(--dim)}.post .rx span{background:#1F2633;padding:4px 10px;border-radius:999px}
 .post.reply{margin-left:64px}.post .re{font:19px/1.3 var(--mono);color:var(--dim);margin-bottom:4px}
 .seat.onblock{outline:3px dashed var(--wolf-soft);outline-offset:6px}
 .seat .tally{position:absolute;bottom:-18px;left:50%;transform:translateX(-50%);background:var(--gold);color:var(--bg);font:900 26px/1 var(--disp);padding:4px 14px;border-radius:999px;animation:pop .35s both}
@@ -211,7 +214,8 @@ const CARD_MS=4500,COUNT_MS=6500;
 let N=0,budget=0.5,meta={},els={},pos={},accuse={},badges={},whispers=[];
 let held=0,live=false,everLive=false,lastPhase=null,outcome=[],queue=[],busy=false,curDay=1;
 let stats={posts:0,buys:0},timeline=[];
-let owed={},postsById={},sawReveal=false,floor={speaking:null,queue:[]},acted=new Set(),onblock=new Set(),tallies={};
+const RX={agree:'👍',doubt:'🤨',suspect:'🐺'};
+let postEls={},owed={},postsById={},sawReveal=false,floor={speaking:null,queue:[]},acted=new Set(),onblock=new Set(),tallies={};
 let clk={turn:null,end:0,win:1,heldAt:false},turnSeq=0;
 /* the bar is driven per frame from a local deadline, so it drains smoothly and snaps full on a new turn */
 function clockTick(m){
@@ -268,7 +272,7 @@ function post(p){
   const tags=(p.claimed_role?'<span class="tag claim">claims '+esc(p.claimed_role)+'</span>':'')+(p.accuse!=null?'<span class="tag accuse">accuses seat '+esc(p.accuse)+'</span>':'')+(p.nominate!=null?'<span class="tag accuse">nominates seat '+esc(p.nominate)+'</span>':'')+(p.second!=null?'<span class="tag accuse">seconds seat '+esc(p.second)+'</span>':'');
   const chats=[p.chat,p.chat2].filter(Boolean).map(c=>'<div class="chat">'+esc(c)+'</div>').join('');
   el.innerHTML='<div class="av" style="background:'+tint(p.seat)+'">'+p.seat+'</div><div class="bubble">'+(parent?'<div class="re">↩ replying to seat '+parent.seat+'</div>':'')+'<div class="who"><b>'+esc(team(p.seat))+'</b>'+tags+'</div>'+chats+'</div>';
-  $('board').appendChild(el);trim($('board'),40);flash(p.seat);
+  $('board').appendChild(el);trim($('board'),40);flash(p.seat);postEls[p.id]={el,rx:{}};
   if(p.accuse!=null){accuse[p.accuse]=(accuse[p.accuse]||0)+1;drawAccused()}
   spot(p.seat,p.chat,(parent?'<span class="tag claim">answers seat '+parent.seat+'</span>':'')+tags);
   const t=p.accuse??p.nominate??p.second;clearArrows();if(t!=null)arrow(p.seat,t,'var(--gold)');else if(parent)arrow(p.seat,parent.seat,'var(--whisper)');
@@ -370,7 +374,7 @@ function reset(m){
   budget=m.budget_usd||budget;meta={};accuse={};badges={};whispers=[];stats={posts:0,buys:0};timeline=[];outcome=[];lastPhase=null;
   layout(m.seats);m.seat_info.forEach(d=>{meta[d.seat]=d;render(d.seat)});
   $('board').innerHTML='';$('denfeed').innerHTML='';$('shopfeed').innerHTML='';$('shop').hidden=true;
-  floor={speaking:null,queue:[]};acted=new Set();onblock=new Set();tallies={};owed={};postsById={};clearArrows();quiet();
+  floor={speaking:null,queue:[]};acted=new Set();onblock=new Set();tallies={};owed={};postsById={};postEls={};clearArrows();quiet();
   queue=[];['card','count','result'].forEach(k=>$(k).classList.remove('show'));busy=false;
   live=everLive;counts();drawAccused();drawSpend();drawLines();
   sys('Game '+m.game+' · '+m.seats+' seats');
@@ -391,6 +395,12 @@ function onEvent(e){
     case 'vote_tally':countReveal(e);if(e.silent&&e.silent.length)sys('🤐 Stayed silent: seats '+e.silent.join(', '));break;
     case 'floor':floor={speaking:e.speaking??null,queue:e.queue||[]};renderAll();
       $('upnext').textContent=floor.queue.length?'Up next: '+floor.queue.map(s=>'seat '+s).join(' · '):'';break;
+    case 'reaction':{const k=e.reaction,icon=RX[k]||'❗',P=postEls[e.post_id];
+      if(P){P.rx[k]=(P.rx[k]||0)+1;let r=P.el.querySelector('.rx');if(!r){r=document.createElement('div');r.className='rx';P.el.querySelector('.bubble').appendChild(r)}
+        r.innerHTML=Object.entries(P.rx).map(([q,n])=>'<span>'+(RX[q]||q)+' '+n+'</span>').join('')}
+      const t=e.target_seat;if(pos[t]){const b=document.createElement('div');b.className='burst';b.textContent=icon;
+        b.style.left=(pos[t][0]+(Math.random()*6-3))+'%';b.style.top=(pos[t][1]-4)+'%';$('ringwrap').appendChild(b);setTimeout(()=>b.remove(),1900)}
+      flash(e.seat);if(k==='suspect')arrow(e.seat,t,'var(--wolf-soft)',3);break}
     case 'reply_owed':owed[e.seat]=e.from;render(e.seat);sys('↩ Seat '+e.seat+' may answer seat '+e.from);break;
     case 'cut_off':sys('✂️ Out of time · cut off: seats '+e.seats.join(', '));break;
     case 'nomination':sys('📌 Seat '+e.seat+' nominates <b>seat '+e.target+'</b>');break;
