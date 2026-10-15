@@ -1,0 +1,9 @@
+.venv/
+__pycache__/
+.pytest_cache/
+/runs/
+.env
+*.pyc
+# Fixture traces under tests/ are checked in despite the root runs/ ignore.
+!tests/fixtures/runs/
+!tests/fixtures/runs/**
