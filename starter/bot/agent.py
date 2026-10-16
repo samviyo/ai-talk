@@ -112,6 +112,53 @@ If your obligation is 'vote' or a night action, reply with JSON:
 Reply with nothing else."""
 
 
+def opener_prompt(role: str, board: list[dict], alive: list[int], seat: int,
+                  nominations: list[dict], announcements: list[str],
+                  partners: list[int] | None = None) -> str:
+    """Opening post plus an optional nomination or second, as JSON."""
+    base = decide_prompt("day_discussion", "post", role, board, [], announcements)
+    noms = ", ".join(f"seat {n['target']} (by {n['by']}, seconds {n['seconds']})"
+                     for n in nominations) or "none yet"
+    return base + f"""
+
+You are seat {seat}. Living seats: {alive}. Nominations so far: {noms}.
+{f"Your wolf partners (never nominate them): {partners}." if partners else ""}
+Only nominated seats can be voted out today; with no nominations nobody is.
+You must nominate someone, even on a hunch; seconding is optional.
+Instead of plain text, reply with JSON:
+{{"chat": "<post, <=280 chars>", "nominate": <seat or null>, "second": <seat or null>}}
+nominate: the seat you most suspect. second: back an existing nomination you agree with."""
+
+
+def parse_opener(text: str, alive: list[int], seat: int,
+                 partners: list[int] | None = None) -> tuple[str, int | None, int | None]:
+    """(chat, nominate, second) from the model's JSON; plain text means no nomination."""
+    allowed = [s for s in alive if s != seat and s not in (partners or [])]
+    try:
+        data = json.loads(text[text.index("{"): text.rindex("}") + 1])
+    except ValueError:
+        return text, None, None
+    if not isinstance(data, dict):
+        return text, None, None
+
+    def seat_or_none(v: object) -> int | None:
+        try:
+            s = int(v)  # type: ignore[arg-type]
+        except (TypeError, ValueError):
+            return None
+        return s if s in allowed else None
+
+    return (str(data.get("chat") or "")[:280], seat_or_none(data.get("nominate")),
+            seat_or_none(data.get("second")))
+
+
+def fallback_nominee(alive: list[int], seat: int, day: int,
+                     partners: list[int] | None = None) -> int | None:
+    """Seat-seeded pick so an empty board still reaches a vote."""
+    pool = [s for s in alive if s != seat and s not in (partners or [])]
+    return pool[(seat * 7 + day) % len(pool)] if pool else None
+
+
 def parse_target(text: str, legal_targets: list[int]) -> int | None:
     """Extract a legal target seat from the model's reply; None to abstain."""
     try:

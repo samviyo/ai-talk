@@ -215,7 +215,7 @@ section h2{margin:0 0 12px;font:800 28px/1 var(--disp);letter-spacing:.14em;text
   <div id="center"><div id="spot" class="idle"></div><div id="upnext"></div><h3>Most accused</h3><div id="accused" style="width:100%;display:flex;flex-direction:column;gap:12px"></div></div></div></main>
  <aside>
   <section><h2>Message board</h2><div id="board"></div></section>
-  <section id="den"><h2>Wolf den · audience only</h2><div id="denfeed"></div></section>
+  <section id="den"><h2>Backstage · audience only, bots never see this</h2><div id="denfeed"></div></section>
   <section id="shop" hidden><h2>Power-ups · secret from bots</h2><div id="shopfeed"></div></section>
   <section id="spend"><h2 id="spendh">Spend vs budget</h2><div id="spendrows"></div></section>
  </aside>
@@ -422,8 +422,8 @@ function onEvent(e){
       if(e.phase==='day_discussion'&&e.round===1){accuse={};drawAccused()}
       sys({night:'🌙 Night '+e.day,day_discussion:'☀️ Day '+e.day+' · round '+e.round,day_vote:'🗳️ Day '+e.day+' · vote'}[e.phase]||e.phase)}break;
     case 'posts_revealed':e.posts.forEach(post);break;
-    case 'wolf_chat':den('<b>Seat '+e.seat+'</b> '+esc(e.msg));break;
-    case 'seer_result':den('<span class="sys">Seer '+e.seer+' checked seat '+e.seat+': <b>'+esc(e.role)+'</b></span>');break;
+    case 'wolf_chat':den('<b>🐺 Seat '+e.seat+'</b> '+esc(e.msg));break;
+    case 'seer_result':den('<span class="sys" style="color:var(--seer)">🔮 Seer '+e.seer+' (private) checked seat '+e.seat+': <b style="color:inherit">'+esc(e.role)+'</b></span>');break;
     case 'night_result':if(e.kill_target!=null)den('<span class="sys">Wolves targeted seat '+e.kill_target+(e.save_target!=null?' · doctor guarded seat '+e.save_target:'')+(e.killed==null?' · <b>saved</b>':'')+'</span>');break;
     case 'vote_tally':countReveal(e);if(e.silent&&e.silent.length)sys('🤐 Stayed silent: seats '+e.silent.join(', '));break;
     case 'floor':floor={speaking:e.speaking??null,queue:e.queue||[]};renderAll();

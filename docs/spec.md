@@ -134,7 +134,7 @@ restarts after an answer or a pass; never during the drain; one at a time.
 - **Mentions wake you.** A post that names a living seat ("seat 7", "@7") or replies to
   that seat's post queues a `{kind: "mention", from, post_id, chat}` for it. During
   discussion `wait_for_turn` returns as soon as a seat has new board activity or
-  mentions, with `you_owe: "discuss"` and a `board_cursor`; it may be served any number
+  mentions, with `you_owe: "discuss"`, a `board_cursor` and the living seats (`alive`); it may be served any number
   of times per window (the "served once" rule applies to night and vote only). Mentions
   are batched per wake, and each other seat can wake a given seat at most once per day.
 - **Nominate to vote.** A post may carry `nominate: <seat>` (once per day) and/or

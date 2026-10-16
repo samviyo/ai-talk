@@ -10,7 +10,9 @@ import httpx
 from mcp import ClientSession
 from mcp.client.streamable_http import streamable_http_client
 
-from .agent import BotConfig, LLMClient, decide_prompt, load_config, parse_target
+from .agent import (
+    BotConfig, LLMClient, decide_prompt, load_config, fallback_nominee, opener_prompt, parse_opener, parse_target,
+)
 
 # Error codes that mean "stop acting this window" rather than retry.
 _STOP_CODES = {"stale_turn", "already_acted", "broke", "call_budget_exceeded"}
@@ -45,7 +47,7 @@ async def _maybe_buy_vote(session: ClientSession, turn: dict) -> None:
 
 
 async def _discuss(session: ClientSession, llm, config: BotConfig,
-                   my_role: str, turn: dict) -> dict | None:
+                   my_role: str, seat: int, partners: list[int], turn: dict) -> dict | None:
     """Live-chat loop; returns a non-discussion turn it already consumed, if any."""
     turn_id = turn["turn_id"]
     cursor = int(turn.get("board_cursor") or 0)
@@ -54,10 +56,11 @@ async def _discuss(session: ClientSession, llm, config: BotConfig,
     opened = False
     reserve = 1
     news_cursor: int | None = None  # event cursor for wait_for_turn(since=...)
+    alive = list(turn.get("alive") or [])
     while True:
         left = deadline_s - (asyncio.get_event_loop().time() - started)
         if left <= 1.0 or llm.broke:
-            return
+            return None
         board = await _call(session, "read_board", {"since": cursor})
         if not isinstance(board, dict) or "error" in board:
             await asyncio.sleep(1.05)
@@ -65,6 +68,7 @@ async def _discuss(session: ClientSession, llm, config: BotConfig,
         posts = board.get("posts", [])
         cursor = int(board.get("next", cursor))
         posts_left = int(board.get("posts_left", 0))
+        nominations = board.get("nominations") or []
         mentions = turn.get("mentions") or []
         want = None
         owe = turn.get("you_owe")
@@ -79,7 +83,7 @@ async def _discuss(session: ClientSession, llm, config: BotConfig,
                 max_tokens=128,
             )
             if llm.broke:
-                return
+                return None
             chat = reply[:280] or "I disagree."
             args: dict = {"turn_id": turn_id, "chat": chat}
             if turn.get("reply_to") is not None:
@@ -95,7 +99,7 @@ async def _discuss(session: ClientSession, llm, config: BotConfig,
                 max_tokens=48, fast=True,
             )
             if llm.broke:
-                return
+                return None
             chat = reply[:280] or "No comment."
             await _call(session, "post", {"turn_id": turn_id, "chat": chat})
         else:
@@ -104,17 +108,30 @@ async def _discuss(session: ClientSession, llm, config: BotConfig,
             elif mentions and posts_left > 0:
                 want = "reply"
             if want:
-                prompt = decide_prompt(
-                    "day_discussion", "post", my_role, posts, [],
-                    _format_announcements(turn.get("announcements", [])),
-                )
+                anns = _format_announcements(turn.get("announcements", []))
+                if want == "opener":
+                    # The opener carries the nomination: no nominations means no vote today.
+                    prompt = opener_prompt(my_role, posts, alive, seat, nominations, anns, partners)
+                else:
+                    prompt = decide_prompt("day_discussion", "post", my_role, posts, [], anns)
                 reply = llm.complete(
                     config.decide_model, prompt, timeout_s=max(1.0, left - 3.0)
                 )
                 if llm.broke:
-                    return
-                chat = reply[:280] or "No comment."
-                out = await _call(session, "post", {"turn_id": turn_id, "chat": chat})
+                    return None
+                post_args: dict = {"turn_id": turn_id}
+                if want == "opener":
+                    chat, nominate, second = parse_opener(reply, alive, seat, partners)
+                    if nominate is None:
+                        nominate = fallback_nominee(alive, seat, int(turn.get("day") or 0), partners)
+                    if nominate is not None:
+                        post_args["nominate"] = nominate
+                    if second is not None and any(n["target"] == second for n in nominations):
+                        post_args["second"] = second
+                else:
+                    chat = reply
+                post_args["chat"] = chat[:280] or "No comment."
+                out = await _call(session, "post", post_args)
                 if isinstance(out, dict) and not out.get("error"):
                     opened = True
         args = {"timeout_s": 3}
@@ -209,6 +226,7 @@ async def play(server: str, token: str, config: BotConfig) -> None:
                     return
                 my_role = role_info["role"]
                 seat = role_info["seat"]
+                partners = list(role_info.get("partners") or [])
                 print(f"seat {seat} role {my_role}", file=sys.stderr)
 
                 handoff: dict | None = None  # a turn _discuss already consumed
@@ -232,6 +250,7 @@ async def play(server: str, token: str, config: BotConfig) -> None:
                         role_info = await _call(session, "get_my_role", {})
                         if isinstance(role_info, dict) and role_info.get("role"):
                             my_role = role_info["role"]
+                            partners = list(role_info.get("partners") or [])
                             print(f"seat {seat} role {my_role}", file=sys.stderr)
 
                     obligation = turn.get("you_owe")
@@ -239,7 +258,7 @@ async def play(server: str, token: str, config: BotConfig) -> None:
                     legal = turn.get("legal_targets", [])
 
                     if obligation == "discuss":
-                        handoff = await _discuss(session, llm, config, my_role, turn)
+                        handoff = await _discuss(session, llm, config, my_role, seat, partners, turn)
                         continue
 
                     board = await _call(session, "read_board", {"since": 0})

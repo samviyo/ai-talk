@@ -297,6 +297,7 @@ class Dispatcher:
                             "round": g.round,
                             "you_owe": "discuss",
                             "legal_targets": [],
+                            "alive": g.alive(),
                             "announcements": announcements,
                             "mentions": mentions,
                             "board_cursor": cursor,
