@@ -137,7 +137,7 @@ def run_suite(views, scorers: list[tuple[str, object]], gates: dict[str, dict],
         exception = "; ".join(errors) if errors else ""
         if mean is None:
             # A raising scorer is a broken suite even if it never scores.
-            rows.append(Row(name, bool(errors) or None,
+            rows.append(Row(name, False if errors else None,
                             "no applicable trials (returned None)", bool(errors),
                             exception))
             continue
