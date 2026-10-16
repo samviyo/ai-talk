@@ -1,0 +1,8 @@
+# Gates for your team scorers: a gate is a threshold on a scorer's mean.
+# One table per scorer, e.g.
+#
+#   [score_puzzle_correct]
+#   min = 0.95
+#
+# A scorer listed here with no table stays an info row; a table with no
+# matching scorer is ignored. Remove this file's comments once you add yours.

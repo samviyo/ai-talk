@@ -8,6 +8,8 @@ dependencies = [
   "starlette>=0.37",
   "uvicorn>=0.30",
   "openai>=1.40",
+  "braintrust>=0.46.1",
+  "autoevals>=0.4.0",
 ]
 
 [project.scripts]
@@ -25,4 +27,4 @@ packages = ["werewolf", "connect4"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
-testpaths = ["werewolf", "connect4"]
+testpaths = ["werewolf", "connect4", "reference"]
