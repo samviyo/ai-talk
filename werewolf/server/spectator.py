@@ -132,6 +132,7 @@ section h2{margin:0 0 12px;font:800 28px/1 var(--disp);letter-spacing:.14em;text
  .bubble .chat{font-size:18px}.post{grid-template-columns:38px 1fr}.post .av{width:38px;height:38px;font-size:20px}
  #denfeed div,.buy,.srow{font-size:16px}.srow{grid-template-columns:110px 1fr 76px}
  .overlay{position:fixed}
+ #lobby{gap:20px;padding:16px;overflow:auto;justify-content:flex-start}#lobby h1{font-size:64px;text-align:center}#lobby .k{font-size:18px}#lobby .sub{font-size:16px;text-align:center}#lobby .grid{width:100%;grid-template-columns:repeat(2,minmax(0,1fr))}#lobby .n{font-size:16px}
  #card{gap:16px;padding:16px;overflow:hidden}#card h1{font-size:56px;max-width:100%;overflow-wrap:anywhere}#card .line{max-width:100%}#card .wake{flex-wrap:wrap;justify-content:center}#count{overflow:auto}.tiles{min-width:0}#card h1{font-size:56px}#card .line{font-size:20px}#card .left{font-size:22px;gap:16px}
  #card .icon{width:80px;height:80px}#card .rolechip{font-size:22px;padding:2px 10px}#card .wake .b{width:160px}#card .wake{font-size:16px}
  #count{padding:24px 16px;gap:18px}#count h1{font-size:44px}#count .top{flex-direction:column;gap:6px}#count .meta{font-size:16px}
@@ -176,6 +177,18 @@ section h2{margin:0 0 12px;font:800 28px/1 var(--disp);letter-spacing:.14em;text
 @keyframes pop{from{opacity:0;transform:scale(.6)}}
 .crow .tot{font:900 72px/1 var(--disp);text-align:right}
 #count .verdict{margin-top:auto;padding:28px 36px;border-radius:20px;background:#1C170C;box-shadow:0 0 0 2px var(--gold);font-size:38px;font-weight:600}
+#lobby{background:radial-gradient(circle at 50% 30%,#141B3A,#070A18 70%);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:48px;z-index:6}
+#lobby .k{font:800 36px/1 var(--disp);letter-spacing:.3em;text-transform:uppercase;color:#9DB4FF}
+#lobby h1{margin:0;font:900 220px/.85 var(--disp);text-transform:uppercase}
+#lobby .sub{font-size:32px;color:var(--dim)}
+#lobby .grid{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:16px;width:1500px}
+#lobby .ls{padding:16px 14px;border-radius:16px;background:#11162A;display:flex;align-items:center;gap:14px;box-shadow:0 0 0 2px var(--gold);opacity:.8;transition:all .4s}
+#lobby .ls.ready{box-shadow:0 0 0 1px #2A3352;opacity:1}
+#lobby .ls .av{width:48px;height:48px;border-radius:50%;flex:none;display:flex;align-items:center;justify-content:center;font:900 28px/1 var(--disp);background:#3A4256;color:#070A18}
+#lobby .ls.ready .av{background:#9DB4FF}
+#lobby .ls b{display:block;font-size:20px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}#lobby .ls span{font:15px var(--mono);color:var(--gold)}#lobby .ls.ready span{color:var(--seer)}
+#lobby .ls>div:last-child{min-width:0}
+#lobby .n{font:28px var(--mono);color:var(--dim)}#lobby .n b{color:var(--fg)}
 #result{background:#140A0D;display:grid;grid-template-columns:1fr 760px}
 #result.show{pointer-events:auto}
 #result.village{background:#0A1220}
@@ -209,6 +222,7 @@ section h2{margin:0 0 12px;font:800 28px/1 var(--disp);letter-spacing:.14em;text
  <div id="card" class="overlay"></div>
  <div id="count" class="overlay"></div>
  <div id="result" class="overlay"></div>
+ <div id="lobby" class="overlay"></div>
 </div>
 <script>
 const $=id=>document.getElementById(id);
@@ -220,7 +234,7 @@ let N=0,budget=0.5,meta={},els={},pos={},accuse={},badges={},whispers=[];
 let held=0,live=false,everLive=false,lastPhase=null,outcome=[],queue=[],busy=false,curDay=1;
 let stats={posts:0,buys:0},timeline=[];
 const RX={agree:'👍',doubt:'🤨',suspect:'🐺'};
-let hot=null,postEls={},owed={},postsById={},sawReveal=false,floor={speaking:null,queue:[]},acted=new Set(),onblock=new Set(),tallies={};
+let lastResult=null,summary=null,inLobby=false,hot=null,postEls={},owed={},postsById={},sawReveal=false,floor={speaking:null,queue:[]},acted=new Set(),onblock=new Set(),tallies={};
 let clk={turn:null,end:0,win:1,heldAt:false},turnSeq=0;
 /* the bar is driven per frame from a local deadline, so it drains smoothly and snaps full on a new turn */
 function clockTick(m){
@@ -365,19 +379,32 @@ function countReveal(e){
   if(!sawReveal)show({kind:'count',html});sawReveal=false;
   sys('🗳️ '+rows.map(([t,,tot])=>'seat '+t+': '+tot).join(' · ')+(e.eliminated!=null?' ⇒ <b>'+esc(name(e.eliminated))+'</b> out':' ⇒ no one'));
 }
+function lobby(m){
+  inLobby=true;const seats=m.seats||[],ready=seats.filter(x=>x.ready).length;
+  seats.forEach(x=>{const d=meta[x.seat]=meta[x.seat]||{};d.team=x.team;if(x.house)d.house=x.house});
+  const all=seats.length&&ready===seats.length;
+  $('lobby').innerHTML='<div style="display:flex;flex-direction:column;align-items:center;gap:12px"><div class="k">The finale</div><h1>Werewolf Night</h1><div class="sub">'+seats.length+' seats · wolves hidden among them · every role visible to you</div></div>'
+   +'<div class="grid">'+seats.map(x=>'<div class="ls'+(x.ready?' ready':'')+'"><div class="av">'+x.seat+'</div><div><b>'+esc(x.house?'house · '+x.house:x.team||'Seat '+x.seat)+'</b><span>'+(x.ready?'ready':'joining…')+'</span></div></div>').join('')+'</div>'
+   +'<div class="n"><b>'+ready+' / '+seats.length+'</b> bots ready'+(all?' · waiting for the operator to start':'')+'</div>';
+  $('result').classList.remove('show');$('lobby').classList.add('show');
+}
+function endLobby(){inLobby=false;$('lobby').classList.remove('show')}
 function result(e){
   const wolvesWin=e.result==='wolves',title=wolvesWin?'Wolves win':e.result==='village'?'Village wins':'Draw';
-  const wolves=Object.keys(meta).filter(s=>meta[s].role==='werewolf');
-  const total=Object.values(meta).reduce((a,d)=>a+(d.spend||0),0),broke=Object.values(meta).filter(d=>d.broke).length;
+  const S=summary,wolves=S?S.wolves.map(String):Object.keys(meta).filter(s=>meta[s].role==='werewolf');
+  const total=S?S.spend_total:Object.values(meta).reduce((a,d)=>a+(d.spend||0),0),broke=S?S.broke_seats.length:Object.values(meta).filter(d=>d.broke).length;
+  const third=S&&S.most_accused!=null?['Seat '+S.most_accused,'most accused']:S&&S.powerups?[S.powerups,'power-ups']:[stats.buys||stats.posts,stats.buys?'power-ups':'posts'];
   const html='<div class="l"><div class="k">Day '+curDay+' · game over</div><h1 style="color:'+(wolvesWin?'var(--wolf)':'var(--villager)')+'">'+title+'</h1>'
    +'<div class="chips">'+wolves.map(s=>'<div class="chip"><b>Seat '+s+'</b><span>'+esc(team(s))+'</span></div>').join('')+'</div></div>'
    +'<aside><h2 style="margin:0;font:800 36px/1 var(--disp);letter-spacing:.14em;text-transform:uppercase;color:var(--dim)">How it went</h2>'
-   +timeline.slice(-7).map(t=>'<div class="tl"><span>'+esc(t[0])+'</span><span>'+esc(t[1])+'</span></div>').join('')
-   +'<div class="stats"><div><b>$'+total.toFixed(2)+'</b><span>total spend</span></div><div><b>'+broke+'</b><span>went broke</span></div><div><b>'+(stats.buys||stats.posts)+'</b><span>'+(stats.buys?'power-ups':'posts')+'</span></div></div></aside>';
-  show({kind:'result',cls:wolvesWin?'':'village',html});
+   +(timeline.length||!S?timeline:S.deaths.map(d=>[(d.cause==='night'?'Night ':'Day ')+d.day,'Seat '+d.seat+(d.cause==='night'?' killed.':' voted out.')])).slice(-7).map(t=>'<div class="tl"><span>'+esc(t[0])+'</span><span>'+esc(t[1])+'</span></div>').join('')
+   +'<div class="stats"><div><b>$'+total.toFixed(2)+'</b><span>total spend</span></div><div><b>'+broke+'</b><span>went broke</span></div><div><b>'+third[0]+'</b><span>'+third[1]+'</span></div></div></aside>';
+  const el=$('result');
+  if(el.classList.contains('show')){el.className='overlay show '+(wolvesWin?'':'village');el.innerHTML=html}
+  else show({kind:'result',cls:wolvesWin?'':'village',html});
 }
 function reset(m){
-  budget=m.budget_usd||budget;meta={};accuse={};badges={};whispers=[];stats={posts:0,buys:0};timeline=[];outcome=[];lastPhase=null;
+  summary=null;budget=m.budget_usd||budget;meta={};accuse={};badges={};whispers=[];stats={posts:0,buys:0};timeline=[];outcome=[];lastPhase=null;
   layout(m.seats);m.seat_info.forEach(d=>{meta[d.seat]=d;render(d.seat)});
   $('board').innerHTML='';$('denfeed').innerHTML='';$('shopfeed').innerHTML='';$('shop').hidden=true;
   floor={speaking:null,queue:[]};acted=new Set();onblock=new Set();tallies={};owed={};postsById={};postEls={};clearArrows();quiet();
@@ -447,7 +474,11 @@ function onEvent(e){
       $('shopfeed').appendChild(el);trim($('shopfeed'),5);timeline.push(['Day '+e.day,'Seat '+e.seat+' bought '+it[0]+'.']);drawSpend();break}
     case 'whisper':whispers.push({from:e.seat,to:e.target});whispers=whispers.slice(-3);drawLines();
       den('<span class="sys" style="color:var(--whisper)">Whisper '+e.seat+' → '+esc(e.target)+':</span> '+esc(e.msg));break;
-    case 'result':result(e);clk.end=0;$('secs').textContent='';break;
+    case 'result':lastResult=e;result(e);clk.end=0;$('secs').textContent='';break;
+    case 'game_over':summary=e.summary||null;lastResult={result:e.result};result(lastResult);clk.end=0;$('secs').textContent='';
+      $('day').textContent='Game over';$('sub').textContent='next game starts when the operator says so';break;
+    case 'lobby':lobby(e);break;
+    case 'game_start':endLobby();$('result').classList.remove('show');queue=[];busy=false;sys('▶ Game '+e.game+' starts');break;
   }
 }
 function handle(m){
@@ -458,7 +489,8 @@ function handle(m){
     const s=$('secs');s.className=held>0?'paused':'';s.textContent=held>0?'paused':(m.pending.length?Math.ceil(m.remaining_s)+'s':'');
     const pend=new Set(m.pending),think=new Set(m.thinking);
     m.seats.forEach(x=>{const d=meta[x.seat]=meta[x.seat]||{};d.spend=x.spent_usd;d.broke=x.broke;d.alive=x.alive;d.pending=pend.has(x.seat);d.thinking=think.has(x.seat);if(x.house)d.house=x.house;render(x.seat)});
-    if(m.waiting_ready&&m.waiting_ready.length){$('day').textContent='Waiting';$('sub').textContent='bots joining: '+m.waiting_ready.length}
+    if(!m.lobby&&inLobby)endLobby();
+    if(m.waiting_ready&&m.waiting_ready.length&&!m.lobby){$('day').textContent='Waiting';$('sub').textContent='bots joining: '+m.waiting_ready.length}
     counts();drawSpend();return;
   }
   if(m.kind==='broke'){const d=meta[m.seat]=meta[m.seat]||{};d.broke=true;render(m.seat);sys('💸 '+esc(name(m.seat))+' is out of budget and goes mute','death');timeline.push(['Day '+curDay,'Seat '+m.seat+' went broke.']);return}

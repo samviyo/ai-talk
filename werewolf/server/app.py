@@ -60,11 +60,14 @@ def create_app(state: AppState) -> Starlette:
                     table._notify_sse_locked()  # flush so history and queue never overlap
                     table.sse_subs.append(queue)
                     init, tick = table.spectator_init(), table.spectator_tick()
+                    lobby = table.lobby_state() if table.awaiting_start else None
                     history = [{"kind": "event", **e.to_dict()} for e in table.game.events(None)]
                 yield "data: " + json.dumps(init) + "\n\n"
                 for m in history:
                     yield "data: " + json.dumps(m) + "\n\n"
                 yield "data: " + json.dumps(tick) + "\n\n"
+                if lobby:
+                    yield "data: " + json.dumps(lobby) + "\n\n"
                 while True:
                     if await request.is_disconnected():
                         return
@@ -101,6 +104,27 @@ def create_app(state: AppState) -> Starlette:
             table._push_sse_locked(table.spectator_init())
             table._push_sse_locked(table.spectator_tick())
         return JSONResponse({"ok": True})
+
+    async def admin_start(request: Request) -> Response:
+        if not _op_ok(request, state):
+            return JSONResponse({"error": "forbidden"}, status_code=403)
+        table = state.tables[0]
+        async with table.cond:
+            await table.check_clock_locked()
+            if not table.awaiting_start:
+                return JSONResponse({"error": "already_started"}, status_code=409)
+            if len(table.ready_seats) < table.config.seats:
+                missing = sorted(set(range(table.config.seats)) - table.ready_seats)
+                return JSONResponse(
+                    {"error": "not_ready", "waiting": missing}, status_code=409
+                )
+            if table.game.result is not None or not table._game_started:
+                # the lobby still sits on a placeholder or a finished game
+                table.start_game_locked()
+            table.begin_locked()
+            table._push_sse_locked(table.spectator_tick())
+            table.cond.notify_all()
+        return JSONResponse({"ok": True, "game": table.game_counter})
 
     async def llm(request: Request) -> Response:
         auth = state.lookup(_bearer(request))
@@ -168,6 +192,7 @@ def create_app(state: AppState) -> Starlette:
             Route("/", index),
             Route("/events", events),
             Route("/admin/house", admin_house, methods=["POST"]),
+            Route("/admin/start", admin_start, methods=["POST"]),
             Route("/llm/v1/chat/completions", llm, methods=["POST"]),
             Mount("/mcp", app=manager.handle_request),
         ],
