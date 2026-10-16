@@ -19,10 +19,10 @@ DEFAULT_PRICES = {
 
 # Simulated cost per accepted action for a house-bot seat, by brain.
 DEFAULT_HOUSE_PRICES = {
-    "random": 0.002,
-    "quiet": 0.004,
-    "accuser": 0.012,
-    "baseline": 0.008,
+    "random": 0.0004,
+    "quiet": 0.0008,
+    "accuser": 0.0024,
+    "baseline": 0.0016,
 }
 
 

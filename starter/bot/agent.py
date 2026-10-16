@@ -30,6 +30,7 @@ class BotConfig:
     read_board_model: str
     decide_model: str
     max_tokens: int
+    buy_double_vote: bool = False
 
 
 def load_config(path: Path | None = None) -> BotConfig:
@@ -39,6 +40,7 @@ def load_config(path: Path | None = None) -> BotConfig:
         read_board_model=raw["read_board_model"],
         decide_model=raw["decide_model"],
         max_tokens=int(raw.get("max_tokens", 1024)),
+        buy_double_vote=bool(raw.get("buy_double_vote", False)),
     )
 
 

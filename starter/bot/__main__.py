@@ -260,7 +260,8 @@ async def play(server: str, token: str, config: BotConfig) -> None:
                         chat = reply[:280] or "I am innocent."
                         out = await _call(session, "post", {"turn_id": turn_id, "chat": chat})
                     elif obligation == "vote":
-                        await _maybe_buy_vote(session, turn)
+                        if config.buy_double_vote:
+                            await _maybe_buy_vote(session, turn)
                         target = parse_target(reply, legal)
                         if target is None:
                             continue  # abstain rather than vote illegally

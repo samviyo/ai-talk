@@ -274,12 +274,12 @@ Server rules:
 
 ## Budget and fallback
 
-- Allowance: `--budget-usd` per seat per game (default 0.50, set properly after the dry
+- Allowance: `--budget-usd` per seat per game (default 0.10, set properly after the dry
   run). The ledger key is (table, game, seat); it resets each game.
 - **House bots pay a simulated cost.** They make no LLM calls, so each accepted action
   (post, vote, night action, wolf chat, `buy` excluded) debits a simulated price from that
   seat's ledger. Prices per brain live in `prices.toml` under `[housebots]`, defaulting to
-  random $0.002, quiet $0.004, accuser $0.012, baseline $0.008, roughly a Haiku-class call.
+  random $0.0004, quiet $0.0008, accuser $0.0024, baseline $0.0016, roughly a Haiku-class call.
   House seats follow every budget rule: they can go broke, go mute and fall back to random.
 - **Fines.** `prices.toml [penalties]` holds `hot_seat_fine` (default 0.10), the fraction
   of the seat budget charged when a seat misses the hot seat. Fines debit the same ledger,
@@ -302,11 +302,11 @@ house bots included, buys from the same ledger (see Budget and fallback).
 
 | Item | Default | Who | Buy during | Limit | Effect |
 |---|---|---|---|---|---|
-| `extra_post` | $0.05 | living seat | during discussion | 1 per day | one more post today (`max_posts` + 1) |
-| `whisper` | $0.08 | living seat | any day window | 1 per day | private message (≤280 chars) to one other living seat, delivered when the window closes |
-| `double_vote` | $0.15 | living seat | its `vote` window, before voting | 1 per game | its ballot counts twice |
-| `shield` | $0.20 | living non-wolf | any day window except on day `max_days` | 1 per day | protects the buyer from the kill on the coming night only |
-| `frame` | $0.15 | living wolf | a night window | 1 per night | any living non-wolf target reads as `werewolf` to the seer tonight |
+| `extra_post` | $0.01 | living seat | during discussion | 1 per day | one more post today (`max_posts` + 1) |
+| `whisper` | $0.016 | living seat | any day window | 1 per day | private message (≤280 chars) to one other living seat, delivered when the window closes |
+| `double_vote` | $0.03 | living seat | its `vote` window, before voting | 1 per game | its ballot counts twice |
+| `shield` | $0.04 | living non-wolf | any day window except on day `max_days` | 1 per day | protects the buyer from the kill on the coming night only |
+| `frame` | $0.03 | living wolf | a night window | 1 per night | any living non-wolf target reads as `werewolf` to the seer tonight |
 
 **Purchase rules**
 - Price must be ≤ remaining budget, else `insufficient_budget`. Over the limit:

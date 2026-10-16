@@ -2,3 +2,5 @@
 read_board_model = "claude-haiku-5-5"
 decide_model = "claude-haiku-5-5"
 max_tokens = 1024
+# Example power-up rule: spend 30% of the $0.10 budget on a day-1 double vote.
+buy_double_vote = false

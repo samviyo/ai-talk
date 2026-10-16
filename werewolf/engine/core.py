@@ -28,11 +28,11 @@ MAX_REACTIONS_PER_DAY = 8
 REPLY_GRANT_KINDS = ("accuse", "nominate", "second")
 
 POWERUP_PRICES: dict[str, float] = {
-    "extra_post": 0.05,
-    "whisper": 0.08,
-    "double_vote": 0.15,
-    "shield": 0.20,
-    "frame": 0.15,
+    "extra_post": 0.01,
+    "whisper": 0.016,
+    "double_vote": 0.03,
+    "shield": 0.04,
+    "frame": 0.03,
 }
 POWERUPS_DAY = ("extra_post", "whisper", "shield")
 DAY_WINDOWS = ("day_discussion", "defence", "day_vote")

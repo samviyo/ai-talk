@@ -142,7 +142,7 @@ async def test_buy_errors_and_shop(tmp_path: Path):
 
 
 async def test_insufficient_budget_rejected(tmp_path: Path):
-    srv = await start_server(tmp_path, seed=94, window_s=60.0, budget=0.10,
+    srv = await start_server(tmp_path, seed=94, window_s=60.0, budget=0.02,
                              discussion_s=60.0)
     try:
         table = srv.state.tables[0]

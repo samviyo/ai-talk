@@ -25,18 +25,18 @@ output = 6.0
 
 # Simulated cost per accepted action for house-bot seats (they make no LLM calls).
 [housebots]
-random = 0.002
-quiet = 0.004
-accuser = 0.012
-baseline = 0.008
+random = 0.0004
+quiet = 0.0008
+accuser = 0.0024
+baseline = 0.0016
 
 # Power-up prices, debited from the same per-seat ledger as LLM calls.
 [powerups]
-extra_post = 0.05
-whisper = 0.08
-double_vote = 0.15
-shield = 0.20
-frame = 0.15
+extra_post = 0.01
+whisper = 0.016
+double_vote = 0.03
+shield = 0.04
+frame = 0.03
 
 # Fines as a fraction of the seat budget, charged through the same ledger.
 [penalties]
