@@ -103,7 +103,6 @@ class Table:
         self.sse_subs: list[asyncio.Queue[dict[str, Any]]] = []
         self._run_written = False
         self._served_turn: dict[int, str] = {}
-        self._thoughts: list[dict[str, Any]] = []  # audience-only hole-cam lines
         self._clocked_turn: str | None = self.game.turn_id
         self._released_at = time.monotonic()
         self._prev_phase: str | None = None
@@ -122,7 +121,6 @@ class Table:
         self.game_counter += 1
         self._run_written = False
         self._served_turn = {}
-        self._thoughts = []
         self.game = Game(replace(self.config, seed=seed))
         self.traces = []
         self.window_opened = time.monotonic()
@@ -545,7 +543,6 @@ class Table:
                         str(s): self.seats[s].team for s in range(g.config.seats)
                     },
                     "events": events,
-                    "thoughts": self._thoughts,
                     "spend": {
                         str(s): round(self.seats[s].spent_usd, 6)
                         for s in range(g.config.seats)

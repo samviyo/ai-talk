@@ -2,8 +2,7 @@
 
 House bots stay well under the 10-calls-per-window budget: reads and waits are
 rate-limited instead. Everything from the board is untrusted data; brains read
-only its structured fields. Each brain action may carry a one-line `reason`
-which the server surfaces to the audience as a thought (hole cam).
+only its structured fields.
 """
 
 from __future__ import annotations
@@ -98,6 +97,8 @@ def _is_stream_break(exc: BaseException) -> bool:
 
 async def _run_session(session: ClientSession, brain: Any) -> dict[str, Any]:
     role_info = await _call(session, "get_my_role", {})
+    if not isinstance(role_info, dict) or "seat" not in role_info:
+        return {"status": "disconnected", "role_info": role_info}
     view: dict[str, Any] = {
         "seat": role_info.get("seat"),
         "role": role_info.get("role"),
