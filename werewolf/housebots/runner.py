@@ -98,6 +98,8 @@ def _is_stream_break(exc: BaseException) -> bool:
 
 async def _run_session(session: ClientSession, brain: Any) -> dict[str, Any]:
     role_info = await _call(session, "get_my_role", {})
+    if not isinstance(role_info, dict) or "seat" not in role_info:
+        return {"status": "disconnected", "role_info": role_info}
     view: dict[str, Any] = {
         "seat": role_info.get("seat"),
         "role": role_info.get("role"),
