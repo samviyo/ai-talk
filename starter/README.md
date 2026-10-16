@@ -1,16 +1,14 @@
 # Werewolf team starter kit
 
-Build an LLM Werewolf agent, prove it with evals, hand the rest to your coding agent.
+Build an LLM Werewolf agent, prove it with evals you write yourself, hand the rest to your coding agent.
 
 ## Layout
 
 - `bot/` — minimal MCP-driven agent. Plays legally, naively. Replace its brain.
-- `evals/` — the check suite. **Read-only for agents** (a PreToolUse hook enforces it).
-  Add *new* puzzle files under `evals/puzzles/` yourself if you want more coverage —
-  but agents are blocked from touching anything here.
-- `evals/puzzles/` — deduction puzzles with known answers.
-- `tests/` — harness tests and fixture traces, including the negative control.
-- `HANDOFF.md` — the prompt you give your coding agent, plus a Definition of Finished.
+- `evals/` — the eval harness (Braintrust `Eval()` under the hood, offline by default).
+  You write the suite: scorers in `evals/scorers/*.py`, gates in `evals/gates.toml`.
+- `evals/datasets/` — your offline datasets: `puzzles.jsonl` and `spoofs.jsonl`.
+- `tests/` — harness tests and fixture transcripts, including the negative control.
 
 ## Run your bot
 
@@ -25,61 +23,48 @@ Only models in the server's `prices.toml` are accepted; `max_tokens` is required
 
 ## Evals: the loop
 
-Three layers, fastest first. All three are red/green with a nonzero exit on any red gate.
+You write the suite; the harness runs it. A *task* is one test case, a *trial* is one
+run of a task, a *transcript* is a game's `trace.jsonl` + `game.json` + `bot.log`,
+the *outcome* is the final game state, a *scorer* is code returning 0–1 (or None =
+not applicable), and a *gate* is a threshold on a scorer's mean. Binary pass/fail
+scorers are preferred. A capability eval measures what the bot can do; a regression
+eval catches what a change broke.
 
 ```sh
-make check            # ~30s, no server: deduction puzzles + refuses spoofed moderator posts
-make practice N=5     # N real games: your bot vs 6 house bots, a fresh server per game
-make eval             # scoreboard over runs/practice (your seat only; house bots excluded)
+make practice N=3     # play 3 real games vs house bots into runs/practice/
+make eval             # your scorers over every (game, scored seat) task
+make check            # offline: your puzzle + spoof datasets through decide()
 ```
 
-`make check` calls `decide(prompt)` in `bot/puzzle_decide.py` with your bot's system
-prompt and model at `temperature=0`. If you change how your bot thinks, keep that file
-pointing at the same prompt and model, or the score stops describing your bot.
+1. `make practice N=3` (needs `BIFROST_API_KEY`; see `evals/practice.py`).
+2. Read the transcripts in `runs/practice/` — error analysis. List the failure
+   modes, biggest first.
+3. Write one scorer per failure mode in `evals/scorers/*.py`, gate each in
+   `evals/gates.toml`, and author offline tasks in `evals/datasets/*.jsonl`:
 
-`make practice` seats your bot at a different seat each game, so you see every role.
-It needs `BIFROST_API_KEY` and `BIFROST_BASE_URL` (`source ../scripts/bifrost-env.sh`);
-the practice server proxies your LLM calls and your bot never sees the key. One game
-takes 3–10 minutes. Each lands in `runs/practice/gameNNN/` with `trace.jsonl`,
-`game.json` and `bot.log`. `make practice N=5 KEEP=1` appends instead of clearing.
-`--fake-llm` (via `uv run python -m evals.practice --fake-llm`) is an offline smoke test.
-
-The scoreboard gates:
-
-| Gate | What it catches |
-|---|---|
-| protocol errors | bad args, acting out of turn, spamming past the call budget |
-| reads board before voting | voting blind |
-| role secrecy | a wolf naming its partner or saying "I'm a wolf" |
-| claim consistency | claiming two different roles |
-| vote accuracy | town votes no better than random (needs 5 games) |
-| seer follow-through | the seer finds a wolf and the town ignores it |
-| budget never broke | running out of money |
-| nominates or seconds | no nominations means no vote that day |
-| hot seat answered | missing the hot-seat deadline costs 10% of the budget |
-
-Spend per game and win rate by role are informational. Thresholds live in
-`evals/thresholds.toml`.
-
-Other scopes:
-
-```sh
-make eval RUNS=runs        # every table under runs/, e.g. a rehearsal table
-make eval SEAT=6           # one seat only
-uv run python -m evals --runs runs --team wolfpack   # by game.json team label
-uv run python -m evals --runs runs --latest 5        # only the 5 most recent games
-uv run python -m evals.offline --fake                # harness self-test, no LLM
+```python
+def score_vote_wolf(input, output, expected=None, **kwargs) -> float | bool | None:
+    ...
 ```
 
-Then:
+4. `make eval`. The scoreboard prints GREEN/RED/info rows with mean and n scored;
+   any red gate exits 1. A scorer with no gate is info. The harness also runs your
+   suite over a known-bad bot (negative control): if nothing goes red there, RED
+   "your suite passes a known-bad bot".
+5. When the suite is live (negative control red), `make lock` — agents are now
+   blocked from editing `evals/` (a human runs `make unlock`).
 
-1. `make check`, `make practice N=5` and `make eval`. Read the red gates and `bot.log`.
-2. Fill in `HANDOFF.md` and hand it to your coding agent.
-3. Review what the agent changed. It cannot edit `evals/`, and that's the point.
+Scopes: `make eval RUNS=runs SEAT=6 TEAM=name LATEST=5`, or
+`uv run python -m evals --runs tests/fixtures/runs/table1 --seat 3`.
+`TRIALS=3 make check` runs 3 trials per task and reports pass rate and pass^k.
+`BT_SEND=1 make eval TEAM=wolfpack` sends runs to Braintrust
+(project `define-finished-wolfpack`); without it, nothing leaves the machine.
+`uv run python -m evals.offline --fake` is the no-LLM harness self-test.
 
-Add your own puzzles as `evals/puzzles/*.json` by hand if you want more coverage.
+Then fill in `HANDOFF.md` and hand it to your coding agent. It can edit `bot/`
+but not `evals/` once locked — the suite is the ground truth, so it stays yours.
 
 ## Negative control
 
-`tests/fixtures/runs/` includes an always-vote-first-seat bot's logs. It must fail
-vote accuracy. If your suite passes it, your suite is dead.
+`tests/fixtures/runs/negctl/` is an always-vote-first-seat bot's transcript. Your
+suite must go red over it. If it passes, your suite is dead.

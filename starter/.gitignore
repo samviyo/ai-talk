@@ -7,3 +7,4 @@ __pycache__/
 # Fixture traces under tests/ are checked in despite the root runs/ ignore.
 !tests/fixtures/runs/
 !tests/fixtures/runs/**
+evals/.locked
