@@ -51,7 +51,7 @@ uv run python -m evals.puzzles --direct --model claude-haiku-5-5   # maintainer:
 uv run python -m evals.puzzles --fake                              # offline harness self-test
 ```
 
-`--direct` needs `BIFROST_BASE_URL` + `BIFROST_API_KEY` (source `../scripts/gateway-env.sh`)
+`--direct` needs `BIFROST_BASE_URL` + `BIFROST_API_KEY` (source `../scripts/bifrost-env.sh` for the Bifrost dev key, or `../scripts/gateway-env.sh` for a personal key)
 and calls the gateway with `temperature=0` so the score is a stable signal, not sampling
 noise. `--fake` runs the harness offline for tests.
 
