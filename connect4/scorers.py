@@ -56,12 +56,14 @@ def load_gates() -> dict[str, Gate]:
 
 
 def wrapped(fn: ScorerFn) -> ScorerFn:
-    """Wrap a team scorer: raises become a NaN score, rendered as a RED row."""
+    """Wrap a team scorer: raises become NaN; the first error text is kept."""
     @functools.wraps(fn)
     def call(input: Any, output: Any, expected: Any = None, **kw) -> float | None:
         try:
             value = fn(input=input, output=output, expected=expected)
-        except Exception:
+        except Exception as exc:
+            # First raise wins; later ones only add to the error count.
+            call.first_error = getattr(call, "first_error", None) or f"{type(exc).__name__}: {exc}"
             return float("nan")
         if value is None:
             return None

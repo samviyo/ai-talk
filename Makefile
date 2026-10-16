@@ -11,8 +11,12 @@ eval-c4:
 test-c4:
 	uv run pytest connect4 -q
 
+C4_SCORER_FILES = $(wildcard connect4/team_evals/*.py)
+
 lock-c4:
 	touch connect4/team_evals/.locked
+	chmod a-w $(C4_SCORER_FILES) connect4/team_evals/gates.toml
 
 unlock-c4:
+	chmod u+w $(C4_SCORER_FILES) connect4/team_evals/gates.toml
 	rm -f connect4/team_evals/.locked
