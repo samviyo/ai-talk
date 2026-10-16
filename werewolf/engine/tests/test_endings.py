@@ -6,17 +6,24 @@ import random
 
 import pytest
 
-from werewolf.engine import Config, Game, NightKill, SeerCheck, Vote
+from werewolf.engine import Config, Game, NightKill, Post, SeerCheck, Vote
 from werewolf.engine.sim import play, random_policy
-from werewolf.engine.tests.helpers import config, seats_with, scripted
+from werewolf.engine.tests.helpers import (
+    config,
+    end_night,
+    seats_with,
+    to_vote,
+)
 
 
 def test_config_rejects_too_few_seats() -> None:
     with pytest.raises(ValueError):
-        Config(seats=6, wolves=2, discussion_rounds=1, max_days=5, seed=1)
-    Config(seats=7, wolves=2, discussion_rounds=1, max_days=5, seed=1)  # boundary ok
+        Config(seats=6, wolves=2, max_days=5, seed=1)
+    Config(seats=7, wolves=2, max_days=5, seed=1)  # boundary ok
     with pytest.raises(ValueError):
-        Config(seats=10, wolves=4, discussion_rounds=1, max_days=5, seed=1)
+        Config(seats=10, wolves=4, max_days=5, seed=1)
+    with pytest.raises(ValueError):
+        Config(seats=7, wolves=2, max_days=5, seed=1, max_posts=0)
 
 
 def test_role_composition() -> None:
@@ -28,23 +35,28 @@ def test_role_composition() -> None:
     assert roles.count("villager") == 3
 
 
-def test_village_wins_when_wolves_dead() -> None:
-    game = Game(config(seed=7, rounds=0))
-    wolves = seats_with(game, "werewolf")
-    # day 1: lynch wolf A; night: other wolf kills nobody (abstain); day 2: lynch wolf B
-    for seat in sorted(game.pending()):
-        game.abstain(seat)
+def _nominate_and_vote(game: Game, target: int) -> None:
+    """Drive a day: one nomination, everyone votes the target; the target abstains."""
     alive = game.alive()
-    for seat in alive:
-        game.act(seat, Vote(wolves[0]) if seat != wolves[0] else Vote(alive[-1]))
-    assert game.role(wolves[0]) == "werewolf"
+    nominator = next(s for s in alive if s != target)
+    game.act(nominator, Post(chat=f"seat {target} is sus", nominate=target), now=0.0)
+    to_vote(game)
+    for seat in sorted(game.pending()):
+        if seat == target:
+            game.abstain(seat)
+        else:
+            game.act(seat, Vote(target))
+
+
+def test_village_wins_when_wolves_dead() -> None:
+    game = Game(config(seed=7))
+    wolves = seats_with(game, "werewolf")
+    end_night(game)
+    _nominate_and_vote(game, wolves[0])
     assert wolves[0] not in game.alive()
     assert game.result is None
-    for seat in sorted(game.pending()):
-        game.abstain(seat)
-    alive = game.alive()
-    for seat in alive:
-        game.act(seat, Vote(wolves[1]) if seat != wolves[1] else Vote(alive[0]))
+    end_night(game)
+    _nominate_and_vote(game, wolves[1])
     assert game.result == "village"
     assert game.phase == "over"
     assert game.events(None)[-1].kind == "result"
@@ -52,7 +64,7 @@ def test_village_wins_when_wolves_dead() -> None:
 
 def test_wolves_win_on_parity() -> None:
     # 5 seats, 1 wolf: kill, lynch a townie, kill again -> 1 wolf vs 1 town is parity
-    game = Game(config(seats=5, wolves=1, rounds=0, max_days=5, seed=7))
+    game = Game(config(seats=5, wolves=1, max_days=5, seed=7))
     wolf = seats_with(game, "werewolf")[0]
     town = [s for s in game.alive() if s != wolf]
 
@@ -62,19 +74,19 @@ def test_wolves_win_on_parity() -> None:
             game.abstain(seat)
 
     clear_night(town[0])
-    alive = game.alive()
-    lynch = next(s for s in alive if s != wolf)
-    for seat in alive:
-        game.act(seat, Vote(lynch) if seat != lynch else Vote(alive[-1] if alive[-1] != lynch else wolf))
+    lynch = next(s for s in game.alive() if s != wolf)
+    _nominate_and_vote(game, lynch)
     assert game.result is None
     clear_night(next(s for s in game.alive() if s != wolf))
     assert game.result == "wolves"
 
 
 def test_max_days_draw() -> None:
-    game = Game(config(seed=7, rounds=0, max_days=2))
-    # everyone abstains forever: no kills, no eliminations -> draw when day 2's vote closes
+    game = Game(config(seed=7, max_days=2))
     while game.result is None:
+        if game.phase == "day_discussion":
+            game.close_discussion()
+            continue
         for seat in sorted(game.pending()):
             game.abstain(seat)
     assert game.result == "draw"
@@ -82,13 +94,16 @@ def test_max_days_draw() -> None:
 
 
 def test_vote_tie_eliminates_nobody() -> None:
-    game = Game(config(seats=7, wolves=2, rounds=0, max_days=3, seed=7))
-    for seat in sorted(game.pending()):
-        game.abstain(seat)
+    game = Game(config(seats=7, wolves=2, max_days=3, seed=7))
+    end_night(game)
     alive = game.alive()
     a, b = alive[0], alive[1]
-    voters = [s for s in alive[2:] if s != a and s != b]
-    half = len(voters) // 2  # 7 seats: a,b + 5 voters -> 3v2 would decide, so split 2/2 + abstain
+    game.act(a, Post(chat=f"seat {b}", nominate=b), now=0.0)
+    game.act(b, Post(chat=f"seat {a}", nominate=a), now=0.0)
+    to_vote(game)
+    assert set(game.legal_targets(a)) == {a, b}
+    half = (len(alive) - 2) // 2
+    voters = [s for s in alive if s not in (a, b)]
     game.act(a, Vote(b))
     game.act(b, Vote(a))
     for seat in voters[:half]:
@@ -104,9 +119,11 @@ def test_vote_tie_eliminates_nobody() -> None:
 
 
 def test_zero_ballots_eliminate_nobody() -> None:
-    game = Game(config(seed=7, rounds=0))
-    for seat in sorted(game.pending()):
-        game.abstain(seat)
+    game = Game(config(seed=7))
+    end_night(game)
+    alive = game.alive()
+    game.act(alive[0], Post(chat="nom", nominate=alive[1]), now=0.0)
+    to_vote(game)
     for seat in sorted(game.pending()):
         game.abstain(seat)
     tally = next(e for e in game.events(None) if e.kind == "vote_tally")
@@ -115,7 +132,7 @@ def test_zero_ballots_eliminate_nobody() -> None:
 
 
 def test_determinism_same_seed_same_policy() -> None:
-    cfg = config(seats=7, wolves=2, rounds=2, max_days=5, seed=42)
+    cfg = config(seats=7, wolves=2, max_days=5, seed=42)
     a = play(cfg, random_policy(random.Random(99)))
     b = play(cfg, random_policy(random.Random(99)))
     assert [e.to_dict() for e in a.events(None)] == [e.to_dict() for e in b.events(None)]

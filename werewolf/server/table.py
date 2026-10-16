@@ -23,8 +23,10 @@ from werewolf.engine import (
 )
 
 TOOL_CALL_BUDGET = 10
-ANNOUNCEMENT_KINDS = {"death", "no_death", "seer_result", "phase", "result"}
-DAY_PHASES = ("day_discussion", "day_vote")
+ANNOUNCEMENT_KINDS = {
+    "death", "no_death", "seer_result", "phase", "result", "vote_skipped",
+}
+DAY_PHASES = ("day_discussion", "defence", "day_vote")
 
 
 def _is_transition(prev: str | None, new: str) -> bool:
@@ -34,7 +36,7 @@ def _is_transition(prev: str | None, new: str) -> bool:
     return (prev == "night") != (new == "night")
 
 # Per-game counters, reset when a new game starts at the same table.
-SINCE_KEYS = ("events", "wolf_chat", "board", "announce")
+SINCE_KEYS = ("events", "wolf_chat", "board", "announce", "whisper")
 
 
 @dataclass
@@ -46,6 +48,7 @@ class SeatState:
     spent_usd: float = 0.0
     broke_emitted: bool = False
     process_alive: bool = True  # finale: flipped False when the bot process exits
+    house: str | None = None  # brain name when the seat is a house bot
     since: dict[str, int] = field(
         default_factory=lambda: {k: 0 for k in SINCE_KEYS}
     )
@@ -100,6 +103,7 @@ class Table:
         self.sse_subs: list[asyncio.Queue[dict[str, Any]]] = []
         self._run_written = False
         self._served_turn: dict[int, str] = {}
+        self._thoughts: list[dict[str, Any]] = []  # audience-only hole-cam lines
         self._clocked_turn: str | None = self.game.turn_id
         self._released_at = time.monotonic()
         self._prev_phase: str | None = None
@@ -118,6 +122,7 @@ class Table:
         self.game_counter += 1
         self._run_written = False
         self._served_turn = {}
+        self._thoughts = []
         self.game = Game(replace(self.config, seed=seed))
         self.traces = []
         self.window_opened = time.monotonic()
@@ -171,7 +176,7 @@ class Table:
     def seat_view(self, seat: int) -> dict[str, Any]:
         """Public identity info for spectators; roles are omniscient-only."""
         g = self.game
-        return {
+        view = {
             "seat": seat,
             "team": self.seats[seat].team,
             "role": g.role(seat),
@@ -179,6 +184,9 @@ class Table:
             "broke": self.is_broke(seat),
             "spend": self.seats[seat].spent_usd,
         }
+        if self.seats[seat].house:
+            view["house"] = self.seats[seat].house
+        return view
 
     # --- clock ---------------------------------------------------------------
 
@@ -195,8 +203,14 @@ class Table:
     def transition_active(self) -> bool:
         return not self.frozen and time.monotonic() < self._transition_until
 
+    def window_length(self) -> float:
+        """Discussion/defence get engine windows; night/vote use the configured cap."""
+        if self.game.phase in ("day_discussion", "defence"):
+            return self.game.window_s()
+        return self.window_s
+
     def deadline(self) -> float:
-        return self.release_at() + self.window_s
+        return self.release_at() + self.window_length()
 
     def holding(self) -> bool:
         return self.frozen or time.monotonic() < self.release_at()
@@ -210,8 +224,12 @@ class Table:
             and not self.frozen
             and time.monotonic() >= self.deadline()
         ):
-            for seat in list(g.pending()):
-                self._fallback_locked(seat)
+            if g.phase == "day_discussion":
+                # the timed window runs its full length, then closes
+                g.close_discussion()
+            else:
+                for seat in list(g.pending()):
+                    self._fallback_locked(seat)
             self.note_window_locked()
         self._write_run_if_done_locked()
         if (
@@ -252,22 +270,39 @@ class Table:
         broke = self.is_broke(seat)
         if not broke:
             g.abstain(seat)
+            if obligation in ("night_kill", "seer_check", "doctor_save"):
+                g._emit(
+                    "night_abstain",
+                    {"seat": seat, "role": g.role(seat)},
+                    audience=frozenset(),
+                )
             self._trace(
                 seat, "_fallback_abstain", {}, "ok",
                 (time.monotonic() - t0) * 1000,
             )
             return
         rng = self._rng
+        abstained = False
         try:
             if obligation == "vote":
                 targets = g.legal_targets(seat)
-                g.act(seat, Vote(rng.choice(targets))) if targets else g.abstain(seat)
+                if targets:
+                    g.act(seat, Vote(rng.choice(targets)))
+                else:
+                    g.abstain(seat)  # no standing nominees: no fallback ballot
+                    abstained = True
             elif obligation == "seer_check":
                 targets = g.legal_targets(seat)
-                g.act(seat, SeerCheck(rng.choice(targets))) if targets else g.abstain(seat)
+                if targets:
+                    g.act(seat, SeerCheck(rng.choice(targets)))
+                else:
+                    g.abstain(seat); abstained = True
             elif obligation == "doctor_save":
                 targets = g.legal_targets(seat)
-                g.act(seat, DoctorSave(rng.choice(targets))) if targets else g.abstain(seat)
+                if targets:
+                    g.act(seat, DoctorSave(rng.choice(targets)))
+                else:
+                    g.abstain(seat); abstained = True
             elif obligation == "night_kill":
                 wolves_alive = [
                     s
@@ -277,16 +312,27 @@ class Table:
                 funded = [s for s in wolves_alive if not self.is_broke(s)]
                 if funded:
                     g.abstain(seat)  # a funded wolf still decides the kill
+                    abstained = True
                 else:
                     # one random ballot total: the lowest-seat wolf submits it
                     submitter = min(wolves_alive)
                     if seat == submitter:
                         targets = g.legal_targets(seat)
-                        g.act(seat, NightKill(rng.choice(targets))) if targets else g.abstain(seat)
+                        if targets:
+                            g.act(seat, NightKill(rng.choice(targets)))
+                        else:
+                            g.abstain(seat); abstained = True
                     else:
-                        g.abstain(seat)
-            else:  # post: broke seats stay silent
+                        g.abstain(seat); abstained = True
+            else:  # defence: a broke nominee's defence simply times out
                 g.abstain(seat)
+                abstained = True
+            if abstained and obligation in ("night_kill", "seer_check", "doctor_save"):
+                g._emit(
+                    "night_abstain",
+                    {"seat": seat, "role": g.role(seat)},
+                    audience=frozenset(),
+                )
         except IllegalAction:
             g.abstain(seat)
         self._trace(
@@ -307,6 +353,17 @@ class Table:
         st.since["announce"] = len(events)
         return out
 
+    def whispers_locked(self, seat: int) -> list[dict[str, Any]]:
+        st = self.seats[seat]
+        events = self.game.events(seat)
+        out = [
+            e.to_dict()
+            for e in events[st.since["whisper"] :]
+            if e.kind == "whisper" and e.data.get("target") == seat
+        ]
+        st.since["whisper"] = len(events)
+        return [{"from": w["seat"], "msg": w["msg"]} for w in out]
+
     def spectator_init(self) -> dict[str, Any]:
         return {
             "kind": "init",
@@ -321,28 +378,34 @@ class Table:
         alive = set(g.alive())
         now = time.monotonic()
         held = max(0.0, round(self.release_at() - now, 1))
+        window = self.window_length()
         # The turn clock is paused during a hold: full window until release.
-        remaining = self.window_s if held > 0 else max(
+        remaining = window if held > 0 else max(
             0.0, round(self.deadline() - now, 1)
         )
+        seats = []
+        for s, st in enumerate(self.seats):
+            entry: dict[str, Any] = {
+                "seat": s, "spent_usd": round(st.spent_usd, 6),
+                "broke": self.is_broke(s), "alive": s in alive,
+            }
+            if st.house:
+                entry["house"] = st.house
+            seats.append(entry)
         return {
             "kind": "tick",
             "game": self.game_counter,
             "remaining_s": remaining,
             "held_s": held,
             "transition": self.transition_active(),
-            "window_s": self.window_s,
+            "window_s": window,
             "pending": sorted(g.pending()) if g.result is None else [],
             "thinking": [s for s, st in enumerate(self.seats) if st.llm_busy],
             "waiting_ready": (
                 sorted(set(range(self.config.seats)) - self.ready_seats)
                 if self.need_role_check else []
             ),
-            "seats": [
-                {"seat": s, "spent_usd": round(st.spent_usd, 6),
-                 "broke": self.is_broke(s), "alive": s in alive}
-                for s, st in enumerate(self.seats)
-            ],
+            "seats": seats,
         }
 
     def _push_sse_locked(self, payload: dict[str, Any]) -> None:
@@ -404,6 +467,9 @@ class Table:
                             "chat": p["chat"],
                             "claimed_role": p["claimed_role"],
                             "accuse": p["accuse"],
+                            "reply_to": p["reply_to"],
+                            "nominate": p["nominate"],
+                            "second": p["second"],
                         }
                     )
             elif e.kind == "vote_tally":
@@ -415,6 +481,7 @@ class Table:
                                 "day": e.day,
                                 "seat": b["seat"],
                                 "target": b["target"],
+                                "weight": b.get("weight", 1),
                             }
                         )
             elif e.kind == "death":
@@ -438,6 +505,21 @@ class Table:
                         "msg": e.data["msg"],
                     }
                 )
+            elif e.kind in ("nomination", "seconded", "standing", "vote_skipped"):
+                out.append({"kind": e.kind, "day": e.day, **e.data})
+            elif e.kind == "powerup":
+                out.append(
+                    {
+                        "kind": "powerup",
+                        "day": e.day,
+                        "seat": e.data["seat"],
+                        "item": e.data["item"],
+                        "target": e.data.get("target"),
+                        "usd": e.data.get("usd"),
+                    }
+                )
+            elif e.kind == "whisper":
+                out.append({"kind": "whisper", "day": e.day, **e.data})
         return out
 
     def write_run(self) -> Path:
@@ -454,7 +536,16 @@ class Table:
                     "seats": g.config.seats,
                     "roles": {str(s): g.role(s) for s in range(g.config.seats)},
                     "result": g.result,
+                    "house": {
+                        str(s): self.seats[s].house
+                        for s in range(g.config.seats)
+                        if self.seats[s].house
+                    },
+                    "teams": {
+                        str(s): self.seats[s].team for s in range(g.config.seats)
+                    },
                     "events": events,
+                    "thoughts": self._thoughts,
                     "spend": {
                         str(s): round(self.seats[s].spent_usd, 6)
                         for s in range(g.config.seats)

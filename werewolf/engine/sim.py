@@ -12,19 +12,44 @@ from werewolf.engine.core import (
     Game,
     NightKill,
     Obligation,
+    Post,
     SeerCheck,
     Vote,
 )
 
-Policy = Callable[[Game, int, Obligation], "Action | None"]
+# obligation is "discuss" during the live discussion window, which has no obligation.
+Policy = Callable[[Game, int, str, float], "Action | None"]
 
 
-def play(config: Config, policy: Policy) -> Game:
-    """Run windows until the game ends; a policy returning None abstains that seat."""
+def play(
+    config: Config,
+    policy: Policy,
+    *,
+    step_s: float = 6.0,
+    post_limit_s: float = 30.0,
+) -> Game:
+    """Run windows until the game ends; None means the seat stays quiet/abstains."""
     game = Game(config)
     while game.result is None:
+        if game.phase == "day_discussion":
+            now = 0.0
+            while now <= post_limit_s:
+                for seat in game.alive():
+                    if game.posts_left(seat) <= 0:
+                        continue
+                    action = policy(game, seat, "discuss", now)
+                    if action is None:
+                        continue
+                    try:
+                        game.act(seat, action, now=now)
+                    except Exception:
+                        continue
+                now += step_s
+            game.close_discussion()
+            continue
         for seat in sorted(game.pending()):
-            action = policy(game, seat, game.pending()[seat])
+            obligation = game.pending()[seat]
+            action = policy(game, seat, obligation, 0.0)
             if action is None:
                 game.abstain(seat)
             else:
@@ -41,11 +66,15 @@ _TARGET_ACTIONS: dict[str, type] = {
 
 
 def random_policy(rng: random.Random) -> Policy:
-    """Random legal targets with occasional abstention; posts abstain."""
+    """Random legal targets with occasional abstention; some small talk."""
 
-    def decide(game: Game, seat: int, obligation: Obligation) -> Action | None:
-        if obligation == "post":
-            return None
+    def decide(game: Game, seat: int, obligation: str, now: float) -> Action | None:
+        if obligation == "discuss":
+            if rng.random() < 0.7:
+                return None
+            return Post(chat=f"seat {seat} says hello")
+        if obligation == "defence":
+            return Post(chat=f"seat {seat} is innocent")
         targets = game.legal_targets(seat)
         if not targets or rng.random() < 0.2:
             return None

@@ -119,10 +119,12 @@ def test_wolves_never_kill_partners(brain_name: str) -> None:
 
 # -- ladder-specific behavior -----------------------------------------------
 
-def test_random_and_quiet_never_post() -> None:
+def test_random_and_quiet_rarely_open() -> None:
     for name in ("random", "quiet"):
         brain = make_brain(name, seed=2)
-        view = make_view(seat=0, you_owe="post")
+        view = make_view(seat=0, you_owe="discuss")
+        view["intent"] = "reply"  # no mentions: quiet stays quiet
+        view["mentions"] = []
         assert brain.decide(view) is None
 
 
@@ -131,12 +133,14 @@ def test_quiet_votes_most_accused() -> None:
     board = [accuse(0, 3), accuse(1, 3), accuse(2, 5)]
     view = make_view(seat=0, board=board)
     action = brain.decide(view)
-    assert action == {"tool": "vote", "args": {"seat": 3}}
+    assert action is not None
+    assert action["tool"] == "vote" and action["args"] == {"seat": 3}
 
 
 def test_accuser_posts_accusation_and_votes_it() -> None:
     brain = make_brain("accuser", seed=9)
-    post_view = make_view(seat=0, you_owe="post", day=1, round=1)
+    post_view = make_view(seat=0, you_owe="discuss", day=1, round=1)
+    post_view["intent"] = "opener"
     post = brain.decide(post_view)
     assert post is not None
     assert post["tool"] == "post"
@@ -145,13 +149,15 @@ def test_accuser_posts_accusation_and_votes_it() -> None:
 
     vote_view = make_view(seat=0, you_owe="vote", day=1)
     vote = brain.decide(vote_view)
-    assert vote == {"tool": "vote", "args": {"seat": target}}
+    assert vote is not None
+    assert vote["tool"] == "vote" and vote["args"] == {"seat": target}
 
 
 def test_accuser_never_accuses_partner() -> None:
     brain = make_brain("accuser", seed=13)
-    view = make_view(seat=1, role="werewolf", partners=[4], you_owe="post",
+    view = make_view(seat=1, role="werewolf", partners=[4], you_owe="discuss",
                      legal_targets=[0, 4])
+    view["intent"] = "opener"
     post = brain.decide(view)
     assert post is not None
     assert post["args"]["accuse"] == 0
@@ -168,8 +174,9 @@ def test_baseline_wolf_counterclaim_never_names_partner() -> None:
     try:
         for seed in range(30):
             brain = make_brain("baseline", seed=seed)
-            view = make_view(seat=1, role="werewolf", partners=[4], you_owe="post",
+            view = make_view(seat=1, role="werewolf", partners=[4], you_owe="discuss",
                              legal_targets=[0, 2, 4, 5])
+            view["intent"] = "talk"
             post = brain.decide(view)
             assert post is not None
             assert post["args"]["claimed_role"] == "seer"
@@ -181,7 +188,8 @@ def test_baseline_wolf_counterclaim_never_names_partner() -> None:
 def test_baseline_seer_claims_checks_truthfully() -> None:
     brain = make_brain("baseline", seed=4)
     checks = {2: "werewolf", 5: "villager"}
-    view = make_view(seat=0, role="seer", you_owe="post", my_checks=checks)
+    view = make_view(seat=0, role="seer", you_owe="discuss", my_checks=checks)
+    view["intent"] = "talk"
     post = brain.decide(view)
     assert post is not None
     assert post["args"]["claimed_role"] == "seer"
@@ -195,7 +203,8 @@ def test_baseline_seer_votes_follow_checks() -> None:
     board = [accuse(0, 5), accuse(1, 5)]  # 5 is most accused but known villager
     view = make_view(seat=0, role="seer", my_checks=checks, board=board)
     action = brain.decide(view)
-    assert action == {"tool": "vote", "args": {"seat": 2}}
+    assert action is not None
+    assert action["tool"] == "vote" and action["args"] == {"seat": 2}
 
 
 def test_baseline_village_votes_seer_revealed_wolf() -> None:
@@ -207,7 +216,8 @@ def test_baseline_village_votes_seer_revealed_wolf() -> None:
     brain = make_brain("baseline", seed=8)
     view = make_view(seat=0, role="villager", board=[seer_post])
     action = brain.decide(view)
-    assert action == {"tool": "vote", "args": {"seat": 6}}
+    assert action is not None
+    assert action["tool"] == "vote" and action["args"] == {"seat": 6}
 
 
 def test_baseline_doctor_protects_claimed_seer() -> None:
@@ -219,7 +229,8 @@ def test_baseline_doctor_protects_claimed_seer() -> None:
     view = make_view(seat=5, role="doctor", you_owe="doctor_save",
                      legal_targets=[0, 3, 5], board=[seer_post])
     action = brain.decide(view)
-    assert action == {"tool": "night_action", "args": {"target": 3}}
+    assert action is not None
+    assert action["tool"] == "night_action" and action["args"] == {"target": 3}
 
 
 def test_baseline_drops_exposed_fake_claim() -> None:
@@ -232,7 +243,8 @@ def test_baseline_drops_exposed_fake_claim() -> None:
     board = [fake_post, accuse(0, 5), accuse(1, 5)]
     view = make_view(seat=0, board=board, dead={3: "werewolf"}, day=2)
     action = brain.decide(view)
-    assert action == {"tool": "vote", "args": {"seat": 5}}
+    assert action is not None
+    assert action["tool"] == "vote" and action["args"] == {"seat": 5}
 
 
 # -- injection resistance -----------------------------------------------------

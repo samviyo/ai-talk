@@ -128,8 +128,8 @@ async def run_final(
 
     state = None
     config = Config(
-        seats=seats_n, wolves=max(3, seats_n // 4), discussion_rounds=2,
-        max_days=6, seed=seed,
+        seats=seats_n, wolves=max(3, seats_n // 4),
+        max_days=6, seed=seed, discussion_s=90.0, max_posts=3,
     )
     tokens = [secrets.token_urlsafe(12) for _ in range(seats_n)]
     rng = random.Random(seed)
@@ -143,17 +143,23 @@ async def run_final(
     if not prices_path.exists():
         raise SystemExit("prices.toml not found")
     prices = Prices.load(prices_path)
+    raw_prices = tomllib.loads(prices_path.read_text())
+    house_prices = {k: float(v) for k, v in raw_prices.get("housebots", {}).items()}
+    powerup_prices = {k: float(v) for k, v in raw_prices.get("powerups", {}).items()}
     state = AppState(
         config=config, n_tables=1, budget_usd=budget_usd, window_s=WINDOW_S,
         runs_dir=Path("runs"), prices=prices, fake_llm=check,
         base_url=os.environ.get("BIFROST_BASE_URL"), teams_toml=teams_toml,
         auto_restart=False,
         min_window_s=min_window_s, transition_s=transition_s,
+        house_prices=house_prices or None, powerup_prices=powerup_prices or None,
     )
     table = state.tables[0]
     for i, st in enumerate(table.seats):
         st.token = tokens[i]
         st.team = assignment[i]
+        if assignment[i] == "house":
+            st.house = "baseline"  # finale house seats run the baseline brain
     state.token_index = {tok: (table, s) for s, tok in enumerate(tokens)}
     table.start_game_locked(seed=seed, need_role_check=True)
 

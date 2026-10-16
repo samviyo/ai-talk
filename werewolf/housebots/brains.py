@@ -1,25 +1,79 @@
 """The four house-bot brains, a skill ladder: random < quiet < accuser < baseline.
 
 None of them calls an LLM; all decisions are deterministic given the seed.
+Canned lines come in small pools so a full table does not repeat one sentence.
 """
 
 from __future__ import annotations
 
 from .core import Action, BaseBrain, View, most_accused, seer_named_wolf
 
+OPENERS = [
+    "Morning all. Anyone sleep badly?",
+    "Let's hear who the wolves are pretending to be today.",
+    "Quiet night. Too quiet?",
+    "I have my eye on a few of you already.",
+    "New day. Talk, or the wolves win by silence.",
+]
+
+REPLIES = [
+    "You called me out, {from_seat}? Explain yourself.",
+    "I heard that, seat {from_seat}. Bold.",
+    "Seat {from_seat} names me and expects silence? No.",
+    "Interesting, seat {from_seat}. I disagree.",
+]
+
+DEFENCES = [
+    "I am innocent. Look at the votes, not at me.",
+    "This is a wolf's pile. Check who pushed it.",
+    "Vote me out and you hand the wolves a free kill.",
+    "I have nothing to hide. Ask me anything tomorrow.",
+]
+
+ACCUSE_LINES = [
+    "I think seat {target} is acting suspicious.",
+    "Seat {target} has been too quiet. Wolf behaviour.",
+    "Something about seat {target} doesn't add up.",
+]
+
+PILE_LINES = [
+    "Seat {target} has the most suspicion.",
+    "The case against seat {target} is strongest.",
+    "I'm with the pile on seat {target}.",
+]
+
 
 class RandomBrain(BaseBrain):
-    """Random legal targets, never posts."""
+    """Random legal targets; talks rarely and at random."""
 
     def _vote(self, view: View) -> Action | None:
         candidates = self._vote_candidates(view)
         if not candidates:
             return None
-        return {"tool": "vote", "args": {"seat": self.rng.choice(candidates)}}
+        target = self.rng.choice(candidates)
+        return {"tool": "vote", "args": {"seat": target}, "reason": "random pick"}
+
+    def _chat(self, view: View, intent: str) -> Action | None:
+        if intent == "opener" and self.rng.random() < 0.5:
+            return {"tool": "post", "args": {"chat": self.rng.choice(OPENERS)},
+                    "reason": "making noise"}
+        return None
+
+    def maybe_buy(self, view: View) -> Action | None:
+        if "whisper" in self._bought or self.rng.random() > 0.15:
+            return None
+        pool = [s for s in self._alive(view) if s != view["seat"]]
+        if not pool:
+            return None
+        self._bought.add("whisper")
+        return {"tool": "buy",
+                "args": {"item": "whisper", "target": self.rng.choice(pool),
+                         "msg": "no reason, just waving"},
+                "reason": "bought a whisper on a whim"}
 
 
 class QuietBrain(BaseBrain):
-    """Never posts; follows a seer claim, else votes the most-accused candidate."""
+    """Rarely posts; follows a seer claim, else votes the most-accused candidate."""
 
     def _vote(self, view: View) -> Action | None:
         candidates = self._vote_candidates(view)
@@ -28,30 +82,36 @@ class QuietBrain(BaseBrain):
         if view.get("role") != "werewolf":
             named = seer_named_wolf(view, candidates)
             if named is not None:
-                return {"tool": "vote", "args": {"seat": named}}
+                return {"tool": "vote", "args": {"seat": named},
+                        "reason": "following the seer claim"}
         target = most_accused(view, candidates, self.rng) or self.rng.choice(candidates)
-        return {"tool": "vote", "args": {"seat": target}}
+        return {"tool": "vote", "args": {"seat": target},
+                "reason": "voting the most accused"}
+
+    def _chat(self, view: View, intent: str) -> Action | None:
+        if intent == "reply" and view.get("mentions"):
+            frm = view["mentions"][0].get("from", "?")
+            return {"tool": "post",
+                    "args": {"chat": self.rng.choice(REPLIES).format(from_seat=frm)},
+                    "reason": "answering a mention"}
+        return None
 
 
 class AccuserBrain(BaseBrain):
-    """Accuses one random alive non-partner each day and votes for them."""
+    """Accuses one random alive non-partner each day, nominates and votes them."""
 
     def __init__(self, seed: int):
         super().__init__(seed)
         self._day_accusations: dict[int, int] = {}
+        self._nominated_today: int = -1
 
     def _pick_target(self, view: View) -> int | None:
         me = view["seat"]
         excluded = {me} | set(view.get("partners") or [])
-        turn = view.get("turn") or {}
-        legal = [s for s in turn.get("legal_targets") or [] if s not in excluded]
-        if legal:
-            return self.rng.choice(sorted(legal))
         pool = [s for s in self._alive(view) if s not in excluded]
-        return self.rng.choice(pool) if pool else None
+        return self.rng.choice(sorted(pool)) if pool else None
 
     def _target(self, view: View) -> int | None:
-        # Stable within a day so the vote matches the accusation.
         day = (view.get("turn") or {}).get("day", 0)
         if day not in self._day_accusations:
             target = self._pick_target(view)
@@ -60,17 +120,24 @@ class AccuserBrain(BaseBrain):
             self._day_accusations[day] = target
         return self._day_accusations[day]
 
-    def _post(self, view: View) -> Action | None:
+    def _chat(self, view: View, intent: str) -> Action | None:
         target = self._target(view)
         if target is None:
             return None
-        return {
-            "tool": "post",
-            "args": {
-                "chat": f"I think seat {target} is acting suspicious.",
-                "accuse": target,
-            },
+        if intent == "reply" and view.get("mentions"):
+            frm = view["mentions"][0].get("from", "?")
+            return {"tool": "post",
+                    "args": {"chat": self.rng.choice(REPLIES).format(from_seat=frm)},
+                    "reason": "answering a mention"}
+        day = (view.get("turn") or {}).get("day", 0)
+        args: dict = {
+            "chat": self.rng.choice(ACCUSE_LINES).format(target=target),
+            "accuse": target,
         }
+        if self._nominated_today != day:
+            args["nominate"] = target
+            self._nominated_today = day
+        return {"tool": "post", "args": args, "reason": f"accusing seat {target}"}
 
     def _vote(self, view: View) -> Action | None:
         candidates = self._vote_candidates(view)
@@ -79,13 +146,16 @@ class AccuserBrain(BaseBrain):
         target = self._target(view)
         if target not in candidates:
             target = self.rng.choice(candidates)
-        return {"tool": "vote", "args": {"seat": target}}
+        return {"tool": "vote", "args": {"seat": target},
+                "reason": "voting my accusation"}
 
 
 class BaselineBrain(BaseBrain):
     """Claims tracking: believes the seer claim, votes its revealed wolves."""
 
     COUNTERCLAIM_CHANCE = 0.15
+    SHIELD_CHANCE = 0.5
+    FRAME_CHANCE = 0.4
 
     def __init__(self, seed: int):
         super().__init__(seed)
@@ -93,6 +163,8 @@ class BaselineBrain(BaseBrain):
         self._findings: dict[int, dict[int, str]] = {}  # claimant -> {seat: role}
         self._posts: dict[tuple[int, int], Action | None] = {}  # (day, round) -> post
         self._counterclaim_done = False
+        self._nominated_today: int = -1
+        self._bought_today: int = -1
 
     # -- interpretation -----------------------------------------------------
 
@@ -195,27 +267,40 @@ class BaselineBrain(BaseBrain):
 
     # -- day ----------------------------------------------------------------
 
-    def _post(self, view: View) -> Action | None:
-        turn = view.get("turn") or {}
-        key = (turn.get("day", 0), turn.get("round", 0))
-        if key not in self._posts:
-            self._posts[key] = self._build_post(view)
-        return self._posts[key]
+    def _chat(self, view: View, intent: str) -> Action | None:
+        if intent == "reply" and view.get("mentions"):
+            frm = view["mentions"][0].get("from", "?")
+            return {"tool": "post",
+                    "args": {"chat": self.rng.choice(REPLIES).format(from_seat=frm)},
+                    "reason": "answering a mention"}
+        post = self._build_post(view)
+        if post is None and intent == "opener":
+            post = {"tool": "post", "args": {"chat": self.rng.choice(OPENERS)},
+                    "reason": "opening the day"}
+        return post
 
     def _build_post(self, view: View) -> Action | None:
         role = view.get("role")
         me = view["seat"]
         turn = view.get("turn") or {}
+        day = turn.get("day", 0)
         if role == "seer":
             checks = view.get("my_checks") or {}
             found = any(r == "werewolf" for r in checks.values())
             # Claim on a wolf, otherwise by day 3 the checks are worth sharing.
-            if checks and (found or turn.get("day", 0) >= 3):
+            if checks and (found or day >= 3):
                 summary = ", ".join(f"{s} {r}" for s, r in sorted(checks.items()))
-                return {
-                    "tool": "post",
-                    "args": {"chat": f"I am the seer: {summary}.", "claimed_role": "seer"},
+                target = next(
+                    (s for s, r in sorted(checks.items()) if r == "werewolf"), None
+                )
+                args: dict = {
+                    "chat": f"I am the seer: {summary}.",
+                    "claimed_role": "seer",
                 }
+                if target is not None and self._nominated_today != day:
+                    args["nominate"] = target
+                    self._nominated_today = day
+                return {"tool": "post", "args": args, "reason": "revealing my checks"}
             return None
         if role == "werewolf":
             if (
@@ -230,31 +315,67 @@ class BaselineBrain(BaseBrain):
                 ]
                 if targets:
                     target = self.rng.choice(targets)
-                    return {
-                        "tool": "post",
-                        "args": {
-                            "chat": f"I am the seer: {target} werewolf.",
-                            "claimed_role": "seer",
-                        },
+                    args = {
+                        "chat": f"I am the seer: {target} werewolf.",
+                        "claimed_role": "seer",
+                        "nominate": target,
                     }
+                    self._nominated_today = day
+                    return {"tool": "post", "args": args,
+                            "reason": "fake seer claim to deflect"}
             return None
         # Villager or doctor: relay the trusted seer's wolf, else join the pile.
         wolves = self._known_wolves(view)
         if wolves:
             target = min(wolves)
-            return {
-                "tool": "post",
-                "args": {"chat": f"The seer says seat {target} is a werewolf.", "accuse": target},
+            args = {
+                "chat": f"The seer says seat {target} is a werewolf.",
+                "accuse": target,
             }
+            if self._nominated_today != day:
+                args["nominate"] = target
+                self._nominated_today = day
+            return {"tool": "post", "args": args,
+                    "reason": f"relaying the seer on seat {target}"}
         # Doctors stay quiet; villagers accuse only a pile a trusted signal started.
         if view.get("role") != "doctor":
             candidates = self._vote_candidates(view)
             target = self._weighted_most_accused(view, candidates)
             if target is not None and target != me:
-                return {
-                    "tool": "post",
-                    "args": {"chat": f"Seat {target} has the most suspicion.", "accuse": target},
+                args = {
+                    "chat": self.rng.choice(PILE_LINES).format(target=target),
+                    "accuse": target,
                 }
+                if self._nominated_today != day:
+                    args["nominate"] = target
+                    self._nominated_today = day
+                return {"tool": "post", "args": args,
+                        "reason": f"joining the pile on seat {target}"}
+        return None
+
+    def maybe_buy(self, view: View) -> Action | None:
+        day = (view.get("turn") or {}).get("day", 0)
+        if self._bought_today == day:
+            return None
+        role = view.get("role")
+        me = view["seat"]
+        # A wolf frames a cleared villager sometimes.
+        if role == "werewolf" and self.rng.random() < self.FRAME_CHANCE:
+            cleared = [s for s in self._cleared_villagers(view) if s in self._alive(view)]
+            if cleared:
+                self._bought_today = day
+                return {"tool": "buy",
+                        "args": {"item": "frame", "target": self.rng.choice(cleared)},
+                        "reason": "framing a cleared seat"}
+        # A villager who trusts a seer claim buys a shield sometimes.
+        if (
+            role in ("villager", "seer")
+            and self._trusted_seer_claim(view) is not None
+            and self.rng.random() < self.SHIELD_CHANCE
+        ):
+            self._bought_today = day
+            return {"tool": "buy", "args": {"item": "shield"},
+                    "reason": "buying protection after the seer claim"}
         return None
 
     def _weighted_most_accused(self, view: View, candidates: list[int]) -> int | None:
@@ -286,7 +407,8 @@ class BaselineBrain(BaseBrain):
         wolves = self._known_wolves(view)
         vote_wolves = [s for s in candidates if s in wolves]
         if vote_wolves:
-            return {"tool": "vote", "args": {"seat": min(vote_wolves)}}
+            return {"tool": "vote", "args": {"seat": min(vote_wolves)},
+                    "reason": "voting a revealed wolf"}
         cleared = self._cleared_villagers(view)
         pool = [s for s in candidates if s not in cleared]
         if view.get("role") == "werewolf" and len(pool) > 1:
@@ -296,12 +418,13 @@ class BaselineBrain(BaseBrain):
             pool = pool or candidates
         if view.get("role") == "werewolf":
             target = most_accused(view, pool, self.rng) or self.rng.choice(pool)
-            return {"tool": "vote", "args": {"seat": target}}
+            return {"tool": "vote", "args": {"seat": target},
+                    "reason": "steering the vote"}
         target = self._weighted_most_accused(view, pool)
         if target is None:
             # No signal: a coordinated fallback beats scattering onto a random pile.
             target = self._fallback_target(view, pool)
-        return {"tool": "vote", "args": {"seat": target}}
+        return {"tool": "vote", "args": {"seat": target}, "reason": "voting the pile"}
 
     def _fallback_target(self, view: View, pool: list[int]) -> int:
         """No seer signal: follow the most-accused pile so the village stays coordinated."""
@@ -319,26 +442,34 @@ class BaselineBrain(BaseBrain):
         if owe == "doctor_save" and role == "doctor":
             claimant = self._trusted_seer_claim(view)
             if claimant in legal:
-                return {"tool": "night_action", "args": {"target": claimant}}
+                return {"tool": "night_action", "args": {"target": claimant},
+                        "reason": "saving the claimed seer"}
             if me in legal:
-                return {"tool": "night_action", "args": {"target": me}}
-            return {"tool": "night_action", "args": {"target": self.rng.choice(legal)}}
+                return {"tool": "night_action", "args": {"target": me},
+                        "reason": "saving myself"}
+            return {"tool": "night_action",
+                    "args": {"target": self.rng.choice(legal)},
+                    "reason": "a guess"}
         if owe == "seer_check" and role == "seer":
             checked = set((view.get("my_checks") or {}).keys())
             unchecked = [s for s in legal if s not in checked]
             pool = unchecked or legal
             # Check the most-accused seat first: a pile is more often wolf-driven.
             target = most_accused(view, pool, self.rng) or self.rng.choice(pool)
-            return {"tool": "night_action", "args": {"target": target}}
+            return {"tool": "night_action", "args": {"target": target},
+                    "reason": "checking the pile"}
         if owe == "night_kill" and role == "werewolf":
             # Hit the exposed seer first; it is the pack's biggest threat.
             claimant = self._trusted_seer_claim(view)
             if claimant in legal:
-                return {"tool": "night_action", "args": {"target": claimant}}
+                return {"tool": "night_action", "args": {"target": claimant},
+                        "reason": "silencing the seer"}
             partners = set(view.get("partners") or [])
             safe = [s for s in legal if s not in partners]
             pool = safe or legal
-            return {"tool": "night_action", "args": {"target": self.rng.choice(pool)}}
+            return {"tool": "night_action",
+                    "args": {"target": self.rng.choice(pool)},
+                    "reason": "picking a victim"}
         return super()._night(view, owe)
 
 

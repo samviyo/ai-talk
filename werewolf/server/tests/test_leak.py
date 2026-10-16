@@ -80,7 +80,24 @@ async def _one_game(tmp_path: Path, seed: int) -> None:
                 assert target in allowed, (
                     f"seed {seed}: seat {seat} learned seat {target} is {role}"
                 )
+            _assert_private_events_hidden(body, seat, g)
     await srv.stop()
+
+
+def _assert_private_events_hidden(body: str, seat: int, g) -> None:
+    """Powerup/whisper/mention/night beats must stay within their audience."""
+    for marker in ('"night_action"', '"night_abstain"', '"ballot"'):
+        assert marker not in body, f"seat {seat} saw omniscient-only {marker}"
+    # whispers addressed to the viewer carry only {"from","msg"}, no other target
+    for m in re.finditer(r'"from": (\d+), "msg":', body):
+        pass  # viewer-addressed whisper, allowed
+    assert '"whisper", "seat"' not in body, f"seat {seat} saw a raw whisper event"
+    # powerup purchases are private to the buyer
+    for m in re.finditer(r'"kind": "powerup"[^{}]*"seat": (\d+)', body):
+        assert int(m.group(1)) == seat, f"seat {seat} saw another seat's purchase"
+    # mentions reach only the named seat
+    for m in re.finditer(r'"kind": "mention"[^{}]*"seat": (\d+)', body):
+        assert int(m.group(1)) == seat, f"seat {seat} saw a mention for another seat"
 
 
 @pytest.mark.parametrize("seed", [101, 202, 303, 404, 505, 606, 707, 808, 909, 1010,

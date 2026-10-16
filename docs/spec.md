@@ -47,9 +47,10 @@ Phase = Literal["night", "day_discussion", "day_vote", "over"]
 class Config:
     seats: int
     wolves: int
-    discussion_rounds: int
     max_days: int
     seed: int
+    discussion_s: float = 60.0
+    max_posts: int = 3
 
 class Game:
     def __init__(self, config: Config): ...
@@ -132,7 +133,24 @@ target}`, `seconded{seat, target}`, `standing{targets}`, `defence{seat}`,
 `vote_skipped{silent}`.
 
 **Vote.** Ballots are private until resolution. Plurality is eliminated; a tie or zero
-ballots eliminates nobody. The role is revealed on death.
+ballots eliminates nobody. The role is revealed on death. Ballots carry `weight` (2 with
+a purchased `double_vote`).
+
+Implementation decisions where this spec was silent:
+- Standing nominees are sorted ascending by seat; defences run in that order.
+- Nomination ranking: most distinct seconders, ties broken by the seeded RNG.
+- A vote fallback ballot is drawn only from standing nominees; with none, no ballot.
+- `wait_for_turn` and `read_board` are rate-limited to 1/s per seat and exempt from the
+  10-call budget; excess returns `rate_limited`.
+- The server caps night/vote windows at `--window-s`; discussion and defence use the
+  engine's own `discussion_s` / 15s.
+- `seer_result` is always deferred to night resolution (frames or not), so timing
+  reveals nothing.
+- `powerup` events are audience {buyer}; `whisper` events are audience {buyer, target};
+  both appear in the omniscient spectator feed.
+- Omniscient-only beats: `night_action{seat,role,action,target}` on each accepted night
+  action, `night_abstain{seat,role}` on a clock-defaulted night obligation, and
+  `ballot{seat,target,weight}` on each accepted vote. No seat ever receives them.
 
 **End.** No wolves alive → `village`. Wolves ≥ non-wolves → `wolves`. If day `max_days`
 ends with neither, the result is `draw`.
@@ -160,6 +178,8 @@ and phase advance per table under one lock.
 | `night_action(turn_id, target)` | `{ok}`. A seer's result arrives as the `seer_result` announcement when night resolves (see Power-ups) |
 | `wolf_chat(msg)` / `read_wolf_chat(since=0)` | Werewolves only; others get `not_your_turn`. Read returns `{messages:[{id, seat, day, msg}], next}` |
 | `get_budget()` | `{spent_usd, limit_usd, remaining_usd, broke}` |
+| `shop()` | `{items: [{item, price_usd, available, reason?}], remaining_usd}` |
+| `buy(turn_id, item, target?, msg?)` | `{ok, remaining_usd}`; `insufficient_budget`, `already_bought`, `not_available`, `invalid_target`, `too_long` |
 
 Announcements are structured dicts, never free text: `{kind: "death", seat, role, cause:
 "night"|"vote"}`, `{kind: "no_death", cause}`, `{kind: "seer_result", seat, role}` (to the
@@ -337,8 +357,9 @@ cmd = "uv run bot"                     # run inside the checkout
 
 ## CLI
 
-- `ww serve [--format practice|final] [--seats N] [--fake-llm] [--tables N] [--budget-usd X] [--min-window-s S] [--transition-s S]`
-- `ww table --bots random,quiet,accuser,baseline,...` runs house bots against a server.
+- `ww serve [--format practice|final] [--seats N] [--fake-llm] [--tables N] [--budget-usd X] [--min-window-s S] [--transition-s S] [--discussion-s S] [--max-posts N]`
+- `ww table --bots random,quiet,accuser,baseline,...` runs house bots against a server;
+  it registers its seats with `POST /admin/house` (operator token) before starting.
 - `ww tokens` prints seat tokens for a table.
 - `ww final [--check] final.toml [--min-window-s S] [--transition-s S]` (pacing defaults: min 10s, transition 8s)
 

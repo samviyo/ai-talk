@@ -19,6 +19,9 @@ from .table import TOOL_CALL_BUDGET, Table
 WAIT_DEFAULT_S = 25.0
 # Frozen clients use httpx's 5s default read timeout; long-poll must beat it.
 WAIT_MAX_S = 3.5
+# wait_for_turn and read_board are rate-limited, not counted against the call budget.
+RATE_LIMIT_S = 1.0
+BUDGET_EXEMPT = {"wait_for_turn", "read_board"}
 
 S = {"type": "integer"}
 TOOLS: list[tuple[str, dict[str, Any], list[str]]] = [
@@ -36,6 +39,9 @@ TOOLS: list[tuple[str, dict[str, Any], list[str]]] = [
             "chat": {"type": "string"},
             "claimed_role": {"type": "string"},
             "accuse": S,
+            "reply_to": S,
+            "nominate": S,
+            "second": S,
         },
         ["turn_id", "chat"],
     ),
@@ -44,6 +50,17 @@ TOOLS: list[tuple[str, dict[str, Any], list[str]]] = [
     ("wolf_chat", {"msg": {"type": "string"}}, ["msg"]),
     ("read_wolf_chat", {"since": S}, []),
     ("get_budget", {}, []),
+    ("shop", {}, []),
+    (
+        "buy",
+        {
+            "turn_id": {"type": "string"},
+            "item": {"type": "string"},
+            "target": S,
+            "msg": {"type": "string"},
+        },
+        ["turn_id", "item"],
+    ),
 ]
 
 
@@ -70,6 +87,7 @@ class Dispatcher:
     def __init__(self, state: AppState) -> None:
         self.state = state
         self.calls: dict[tuple[str, int], tuple[str, int]] = {}  # (table,seat) -> (turn_id, count)
+        self._rate: dict[tuple[str, int], float] = {}  # last exempt call time
 
     def _budget_check(
         self, table: Table, seat: int, tool: str
@@ -85,6 +103,15 @@ class Dispatcher:
         if count >= TOOL_CALL_BUDGET:
             return _err("call_budget_exceeded")
         self.calls[key] = (turn_id, count + 1)
+        return None
+
+    def _rate_check(self, table: Table, seat: int) -> CallToolResult | None:
+        key = (table.name, seat)
+        now = time.monotonic()
+        last = self._rate.get(key, 0.0)
+        if now - last < RATE_LIMIT_S:
+            return _err("rate_limited", "wait_for_turn/read_board are limited to 1/s")
+        self._rate[key] = now
         return None
 
     @staticmethod
@@ -136,16 +163,21 @@ class Dispatcher:
                     table.unfreeze_locked()
                     table.cond.notify_all()
                 return self._role(table, seat)
-            if over and name in ("post", "vote", "night_action", "wolf_chat"):
+            if over and name in ("post", "vote", "night_action", "wolf_chat", "buy"):
                 return _err("not_your_turn", "game over")
             if not over:
                 if name in ("post", "vote", "night_action"):
                     gate = self._gate_err(table)
                     if gate is not None:
                         return gate
-                budget_err = self._budget_check(table, seat, name)
-                if budget_err is not None:
-                    return budget_err
+                if name in BUDGET_EXEMPT:
+                    rate = self._rate_check(table, seat)
+                    if rate is not None:
+                        return rate
+                else:
+                    budget_err = self._budget_check(table, seat, name)
+                    if budget_err is not None:
+                        return budget_err
             handler = getattr(self, f"_tool_{name}", None)
             if handler is None:
                 return _err("bad_schema", f"unknown tool {name}")
@@ -177,26 +209,54 @@ class Dispatcher:
                         # Between games: the next one opens on get_my_role readiness.
                         return {"status": "idle", "result": g.result}
                     return {"status": "over", "result": g.result}
-                owe = g.pending().get(seat)
-                # Serve each window once per seat; re-polls wait for the next.
-                if (
-                    owe is not None
-                    and not table.frozen
-                    and not table.holding()
-                    and table._served_turn.get(seat) != g.turn_id
-                ):
-                    table._served_turn[seat] = g.turn_id
-                    announcements = table.announcements_locked(seat)
-                    return {
-                        "turn_id": table.public_turn_id(),
-                        "phase": g.phase,
-                        "day": g.day,
-                        "round": g.round,
-                        "you_owe": owe,
-                        "legal_targets": g.legal_targets(seat),
-                        "announcements": announcements,
-                        "deadline_s": round(table.deadline() - time.monotonic(), 2),
-                    }
+                announcements = table.announcements_locked(seat)
+                if g.phase == "day_discussion":
+                    # Live chat: wake on an obligation-free discuss turn or new board.
+                    serve_key = f"discuss:{g.turn_id}"
+                    cursor = g._day_cursors.get(seat, 0)
+                    mentions = g.unread_mentions(seat, cursor)
+                    new_posts = g._post_seq > table.seats[seat].since["board"]
+                    first = table._served_turn.get(seat) != serve_key
+                    if not table.frozen and not table.holding() and (
+                        first or mentions or new_posts
+                    ):
+                        table._served_turn[seat] = serve_key
+                        if first:
+                            cursor = g._post_seq  # opener wake: cursor to now
+                            g._day_cursors[seat] = cursor
+                        return {
+                            "turn_id": table.public_turn_id(),
+                            "phase": g.phase,
+                            "day": g.day,
+                            "round": g.round,
+                            "you_owe": "discuss",
+                            "legal_targets": [],
+                            "announcements": announcements,
+                            "mentions": mentions,
+                            "board_cursor": cursor,
+                            "posts_left": g.posts_left(seat),
+                            "deadline_s": round(table.deadline() - time.monotonic(), 2),
+                        }
+                else:
+                    owe = g.pending().get(seat)
+                    # Serve each window once per seat; re-polls wait for the next.
+                    if (
+                        owe is not None
+                        and not table.frozen
+                        and not table.holding()
+                        and table._served_turn.get(seat) != g.turn_id
+                    ):
+                        table._served_turn[seat] = g.turn_id
+                        return {
+                            "turn_id": table.public_turn_id(),
+                            "phase": g.phase,
+                            "day": g.day,
+                            "round": g.round,
+                            "you_owe": owe,
+                            "legal_targets": g.legal_targets(seat),
+                            "announcements": announcements,
+                            "deadline_s": round(table.deadline() - time.monotonic(), 2),
+                        }
                 now = time.monotonic()
                 remaining = deadline - now
                 if table.frozen:
@@ -230,17 +290,21 @@ class Dispatcher:
     def _tool_read_board(self, table: Table, seat: int, args: dict) -> dict:
         st = table.seats[seat]
         since = int(args.get("since") or 0)
-        posts: list[dict[str, Any]] = []
-        next_id = st.since["board"]
-        for e in table.game.events(seat):
-            if e.kind != "posts_revealed":
-                continue
-            for p in e.data["posts"]:
-                if p["id"] >= since:
-                    posts.append(p)
-                next_id = max(next_id, p["id"] + 1)
-        st.since["board"] = next_id
-        return {"posts": posts, "next": next_id}
+        state = table.game.board_state(seat, since)
+        st.since["board"] = state["next"]
+        out = {
+            "posts": state["posts"],
+            "next": state["next"],
+            "nominations": state["nominations"],
+            "standing": state["standing"],
+            "posts_left": state["posts_left"],
+            "whispers": table.whispers_locked(seat),
+        }
+        if table.game.phase == "day_discussion":
+            out["discussion_ends_in_s"] = round(
+                max(0.0, table.deadline() - time.monotonic()), 2
+            )
+        return out
 
     def _tool_post(self, table: Table, seat: int, args: dict) -> dict | CallToolResult:
         if table.is_broke(seat):
@@ -255,11 +319,16 @@ class Dispatcher:
                     chat=str(args.get("chat") or ""),
                     claimed_role=args.get("claimed_role"),
                     accuse=args.get("accuse"),
+                    reply_to=args.get("reply_to"),
+                    nominate=args.get("nominate"),
+                    second=args.get("second"),
                 ),
+                now=time.monotonic(),
             )
         except IllegalAction as e:
             return _err(e.code, e.msg)
-        return {"ok": True}
+        self._charge_house(table, seat, "post")
+        return {"ok": True, "posts_left": table.game.posts_left(seat)}
 
     def _tool_vote(self, table: Table, seat: int, args: dict) -> dict | CallToolResult:
         stale = self._check_turn_id(table, args)
@@ -270,6 +339,7 @@ class Dispatcher:
         except (IllegalAction, TypeError, ValueError) as e:
             code = e.code if isinstance(e, IllegalAction) else "bad_schema"
             return _err(code, str(e))
+        self._charge_house(table, seat, "vote")
         return {"ok": True}
 
     def _tool_night_action(
@@ -293,8 +363,8 @@ class Dispatcher:
         except (IllegalAction, TypeError, ValueError) as e:
             code = e.code if isinstance(e, IllegalAction) else "bad_schema"
             return _err(code, str(e))
-        if isinstance(action, SeerCheck):
-            return {"ok": True, "role": table.game.role(action.target)}
+        self._charge_house(table, seat, "night_action")
+        # With frames, every seer result is deferred to night resolution.
         return {"ok": True}
 
     def _tool_wolf_chat(self, table: Table, seat: int, args: dict) -> dict | CallToolResult:
@@ -302,6 +372,7 @@ class Dispatcher:
             table.game.wolf_chat(seat, str(args.get("msg") or ""))
         except IllegalAction as e:
             return _err(e.code, e.msg)
+        self._charge_house(table, seat, "wolf_chat")
         return {"ok": True}
 
     def _tool_read_wolf_chat(self, table: Table, seat: int, args: dict) -> dict | CallToolResult:
@@ -328,6 +399,61 @@ class Dispatcher:
             "remaining_usd": round(max(0.0, limit - spent), 6),
             "broke": table.is_broke(seat),
         }
+
+    def _tool_shop(self, table: Table, seat: int, args: dict) -> dict:
+        items = table.game.shop(seat)
+        for entry in items:
+            override = self.state.powerup_prices.get(entry["item"])
+            if override is not None:
+                entry["price_usd"] = override
+        spent = table.seats[seat].spent_usd
+        remaining = max(0.0, table.budget_usd - spent)
+        for entry in items:
+            if entry["available"] and entry["price_usd"] > remaining:
+                entry["available"] = False
+                entry["reason"] = "insufficient_budget"
+        return {"items": items, "remaining_usd": round(remaining, 6)}
+
+    def _tool_buy(self, table: Table, seat: int, args: dict) -> dict | CallToolResult:
+        if table.is_broke(seat):
+            return _err("broke", "seat budget exhausted")
+        stale = self._check_turn_id(table, args)
+        if stale is not None:
+            return stale
+        item = str(args.get("item") or "")
+        price = self.state.powerup_prices.get(item)
+        if price is None:
+            return _err("not_available", f"unknown item {item!r}")
+        spent = table.seats[seat].spent_usd
+        remaining = table.budget_usd - spent
+        if price > remaining + 1e-9:
+            # Rejected buys charge nothing; the engine never sees them.
+            return _err("insufficient_budget", f"{item} costs ${price:.2f}")
+        try:
+            table.game.apply_powerup(
+                seat,
+                item,
+                target=args.get("target"),
+                msg=args.get("msg"),
+            )
+        except IllegalAction as e:
+            return _err(e.code, e.msg)
+        table.charge_locked(seat, price)
+        # stamp the price onto the powerup event for game.json/SSE
+        for e in reversed(table.game._events):
+            if e.kind == "powerup" and e.data.get("seat") == seat:
+                e.data["usd"] = price
+                break
+        return {"ok": True, "remaining_usd": round(table.budget_usd - table.seats[seat].spent_usd, 6)}
+
+    def _charge_house(self, table: Table, seat: int, action: str) -> None:
+        """House bots pay a simulated price per accepted action."""
+        brain = table.seats[seat].house
+        if not brain:
+            return
+        price = self.state.house_prices.get(brain, 0.0)
+        if price:
+            table.charge_locked(seat, price)
 
     def _check_turn_id(self, table: Table, args: dict) -> CallToolResult | None:
         # The raw engine id is also accepted for one game back of compatibility.

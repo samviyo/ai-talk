@@ -85,6 +85,23 @@ def create_app(state: AppState) -> Starlette:
             headers={"Cache-Control": "no-cache"},
         )
 
+    async def admin_house(request: Request) -> Response:
+        if not _op_ok(request, state):
+            return JSONResponse({"error": "forbidden"}, status_code=403)
+        try:
+            payload = await request.json()
+        except Exception:
+            return JSONResponse({"error": "bad_schema"}, status_code=400)
+        table = state.tables[0]
+        async with table.cond:
+            for k, brain in payload.items():
+                seat = int(k)
+                if 0 <= seat < len(table.seats):
+                    table.seats[seat].house = str(brain)
+            table._push_sse_locked(table.spectator_init())
+            table._push_sse_locked(table.spectator_tick())
+        return JSONResponse({"ok": True})
+
     async def llm(request: Request) -> Response:
         auth = state.lookup(_bearer(request))
         if auth is None:
@@ -150,6 +167,7 @@ def create_app(state: AppState) -> Starlette:
         routes=[
             Route("/", index),
             Route("/events", events),
+            Route("/admin/house", admin_house, methods=["POST"]),
             Route("/llm/v1/chat/completions", llm, methods=["POST"]),
             Mount("/mcp", app=manager.handle_request),
         ],

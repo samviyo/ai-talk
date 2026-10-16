@@ -19,8 +19,16 @@ BRAINS = ["baseline", "baseline", "accuser", "quiet", "random", "baseline", "bas
 
 
 async def test_full_game_with_house_bots(tmp_path: Path):
-    srv = await start_server(tmp_path, seed=42, window_s=0.5)
+    srv = await start_server(tmp_path, seed=42, window_s=0.5, discussion_s=6.0)
     try:
+        # ww table registers house seats through the operator endpoint
+        async with httpx.AsyncClient() as client:
+            resp = await client.post(
+                srv.url + "/admin/house",
+                params={"op": srv.state.operator_token},
+                json={str(i): BRAINS[i] for i in range(7)},
+            )
+            assert resp.status_code == 200
         results = await asyncio.wait_for(
             asyncio.gather(
                 *(
@@ -40,6 +48,21 @@ async def test_full_game_with_house_bots(tmp_path: Path):
         assert data["events"], "no events recorded"
         assert (tmp_path / "runs" / "table1" / "game1" / "trace.jsonl").exists()
 
+        # house map recorded, and every house seat paid its simulated price
+        assert data["house"] == {str(i): BRAINS[i] for i in range(7)}
+        assert any(v > 0 for v in data["spend"].values()), "house seats never charged"
+
+        # live-chat shape: posts by many seats, at least one nomination, a vote
+        posts = [e for e in data["events"] if e["kind"] == "post"]
+        day1 = [p for p in posts if p["day"] == 1]
+        assert len({p["seat"] for p in day1}) >= 3, "expected several seats posting"
+        assert any(e["kind"] == "nomination" for e in data["events"])
+        votes = [e for e in data["events"] if e["kind"] == "vote"]
+        assert votes or any(e["kind"] == "vote_skipped" for e in data["events"])
+        assert all(
+            "weight" in v for v in votes
+        ), "vote events must carry the double_vote weight"
+
         # the team-facing eval harness must accept what we wrote
         import sys as _sys
 
@@ -55,8 +78,29 @@ async def test_full_game_with_house_bots(tmp_path: Path):
             assert sorted(log.wolves) == sorted(
                 s for s, r in log.roles.items() if r == "werewolf"
             )
+            assert log.house == {i: BRAINS[i] for i in range(7)}
         finally:
             _sys.path.remove(starter)
+    finally:
+        await srv.stop()
+
+
+async def test_no_nominee_day_skips_vote(tmp_path: Path):
+    """All-quiet discussion: the vote is skipped and the game moves to night."""
+    srv = await start_server(tmp_path, seed=43, window_s=0.5, discussion_s=1.0)
+    try:
+        results = await asyncio.wait_for(
+            asyncio.gather(
+                *(run_bot(srv.url, srv.token(i), "quiet", 200 + i) for i in range(7))
+            ),
+            timeout=180,
+        )
+        assert all(r.get("status") == "over" for r in results), results
+        data = json.loads(
+            (tmp_path / "runs" / "table1" / "game1" / "game.json").read_text()
+        )
+        assert data["result"] in ("village", "wolves", "draw")
+        assert any(e["kind"] == "vote_skipped" for e in data["events"])
     finally:
         await srv.stop()
 
@@ -120,7 +164,7 @@ async def test_call_budget_exceeded(tmp_path: Path):
         turn_id = table.game.turn_id
         last = None
         for i in range(12):
-            last = await mcp_call(srv.url, srv.token(seat), "read_board", {"since": 0})
+            last = await mcp_call(srv.url, srv.token(seat), "shop", {})
             if last.get("error") == "call_budget_exceeded":
                 break
         assert last is not None and last.get("error") == "call_budget_exceeded", last
