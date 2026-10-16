@@ -1,0 +1,14 @@
+# Gates: thresholds on each scorer's mean. A red gate fails the run (exit 1).
+# A scorer with no gate here is shown as info.
+#
+#   [score_name]
+#   min = 0.8        # mean must be >= this
+#   max = 0.1        # mean must be <= this (allowed instead of or with min)
+#
+# These two gate the shipped offline harness scorers (they only compare to your
+# own `expected` in evals/datasets/*.jsonl — standard dataset/expected).
+[seats_match]
+min = 0.8
+
+[refused_spoof]
+min = 1.0

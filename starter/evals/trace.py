@@ -1,4 +1,4 @@
-"""Loading and schema for game traces and game logs.
+"""Loading transcripts (trace.jsonl + game.json) and building task inputs.
 
 trace.jsonl: one JSON object per line: {ts, seat, tool, args, result_code, latency_ms}.
 game.json: one object per game:
@@ -8,6 +8,7 @@ game.json: one object per game:
     "roles": {"0": "werewolf", "1": "seer", ...},   # seat -> role, string keys
     "result": "village" | "wolves" | "draw",
     "house": {"0": "baseline", ...},                 # optional: house seat -> brain name
+    "teams": {"3": "wolfpack"},                      # optional: seat -> team name
     "events": [                                      # engine-visible events, in order
       {"kind": "post", "day": 1, "round": 1, "seat": 2, "chat": "...", "claimed_role": null, "accuse": null},
       {"kind": "vote", "day": 1, "seat": 3, "target": 5},
@@ -47,6 +48,7 @@ class TraceLine:
 
 @dataclass
 class GameLog:
+    """The outcome: the final game state as the server recorded it."""
     seats: int
     roles: dict[int, str]
     result: str
@@ -61,6 +63,16 @@ class GameLog:
 
     def dead_before(self, day: int) -> set[int]:
         return {e["seat"] for e in self.events if e["kind"] == "death" and e["day"] < day}
+
+
+@dataclass
+class GameView:
+    """One task input: everything a scorer sees for one played seat of one game."""
+    game: str        # "table1/game1"
+    seat: int        # the scored seat
+    name: str        # "table1/game1 seat 3"
+    log: GameLog     # full game outcome (roles include every seat)
+    traces: list[TraceLine]  # the whole table's trace lines, not just this seat
 
 
 def load_game(game_dir: Path) -> tuple[list[TraceLine], GameLog]:
@@ -114,3 +126,38 @@ def iter_games(runs_dir: Path, latest: int | None = None):
     for game_dir in dirs:
         traces, log = load_game(game_dir)
         yield f"{game_dir.parent.name}/{game_dir.name}", traces, log
+
+
+def scored_seats(log: GameLog) -> set[int]:
+    """Seats a team should write scorers for: every non-house seat."""
+    return set(log.roles) - set(log.house)
+
+
+def seat_views(traces: list[TraceLine], log: GameLog, game: str) -> list[GameView]:
+    """One GameView per scored seat of one played game — the dataset rows."""
+    return [
+        GameView(game=game, seat=seat, name=f"{game} seat {seat}", log=log, traces=traces)
+        for seat in sorted(scored_seats(log))
+    ]
+
+
+def game_views(runs_dir: Path, seat: int | None = None, team: str | None = None,
+               latest: int | None = None) -> list[GameView]:
+    """Dataset for `python -m evals`: one row per (game, scored seat)."""
+    rows: list[GameView] = []
+    for name, traces, log in iter_games(runs_dir, latest=latest):
+        seats: set[int] | None
+        if seat is not None:
+            seats = {seat}
+        elif team is not None and log.teams:
+            seats = {s for s, t in log.teams.items() if t == team}
+        else:
+            seats = scored_seats(log)  # house seats are excluded
+        if seats is None:
+            seats = set(log.roles)
+        for s in sorted(seats):
+            if s not in log.roles:
+                continue  # a --seat outside this game
+            rows.append(GameView(game=name, seat=s, name=f"{name} seat {s}",
+                                 log=log, traces=traces))
+    return rows
