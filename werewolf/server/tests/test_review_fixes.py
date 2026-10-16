@@ -470,7 +470,7 @@ async def test_every_game_writes_run_dir(tmp_path: Path):
     from werewolf.housebots.runner import run_bot
 
     srv = await start_server(
-        tmp_path, seed=70, window_s=4.0, auto_restart=True, discussion_s=2.0,
+        tmp_path, seed=70, window_s=4.0, auto_restart=True,
     )
     try:
         table = srv.state.tables[0]
