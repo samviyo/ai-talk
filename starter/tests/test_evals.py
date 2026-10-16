@@ -72,8 +72,40 @@ def test_no_gated_scorer_leaves_only_info_rows(tmp_path):
     (tmp_path / "gates.toml").write_text("")
     proc = run_cli(["-m", "evals", "--runs", str(TABLE1),
                     "--scorers", str(tmp_path), "--gates", str(tmp_path / "gates.toml")])
-    assert "info" in proc.stdout
-    assert proc.returncode == 0  # no gates, no red: suite not live yet
+    assert "no gates yet: add [score_name] min = ... to evals/gates.toml" in proc.stdout
+    assert proc.returncode == 1  # scorers with no gates: the suite is not live
+
+
+def test_no_gates_red_row_names_a_scorer(tmp_path):
+    write_scorer(tmp_path, always_one_scorer())
+    (tmp_path / "gates.toml").write_text("")
+    proc = run_cli(["-m", "evals", "--runs", str(TABLE1),
+                    "--scorers", str(tmp_path), "--gates", str(tmp_path / "gates.toml")])
+    line = next(l for l in proc.stdout.splitlines() if "no gates yet" in l)
+    assert "RED" in line
+
+
+def test_raising_scorer_with_no_gate_is_red(tmp_path):
+    """A raising scorer is RED even when only another scorer has a gate."""
+    write_scorer(tmp_path, raising_scorer() + "\n\n" + always_one_scorer())
+    (tmp_path / "gates.toml").write_text("[score_all_good]\nmin = 0.8\n")
+    proc = run_cli(["-m", "evals", "--runs", str(TABLE1),
+                    "--scorers", str(tmp_path), "--gates", str(tmp_path / "gates.toml")])
+    assert "scorer exploded" in proc.stdout
+    boom = next(l for l in proc.stdout.splitlines() if "score_boom" in l)
+    assert "RED" in boom
+    assert proc.returncode == 1
+
+
+def test_raising_scorer_on_negctl_is_red_and_names_the_scorer(tmp_path):
+    """A scorer that raises on the bad bot broke; it did not catch anything."""
+    write_scorer(tmp_path, raising_scorer())
+    (tmp_path / "gates.toml").write_text("[score_boom]\nmin = 0.8\n")
+    proc = run_cli(["-m", "evals", "--runs", str(TABLE1),
+                    "--scorers", str(tmp_path), "--gates", str(tmp_path / "gates.toml")])
+    bad = next(l for l in proc.stdout.splitlines() if "score_boom" in l and "negctl" in l)
+    assert "RED" in bad and "scorer exploded" in bad
+    assert proc.returncode == 1
 
 
 def test_always_one_scorer_negative_control_red(tmp_path):

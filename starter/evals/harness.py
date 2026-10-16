@@ -134,37 +134,46 @@ def run_suite(views, scorers: list[tuple[str, object]], gates: dict[str, dict],
             scores=[_wrap(fn, errors)], project=project,
         )
         mean, n, _ = _mean(res.results, name)
+        exception = "; ".join(errors) if errors else ""
         if mean is None:
-            rows.append(Row(name, None, "no applicable trials (returned None)", False,
-                            exception="; ".join(errors) if errors else ""))
+            # A raising scorer is a broken suite even if it never scores.
+            rows.append(Row(name, False if errors else None,
+                            "no applicable trials (returned None)", bool(errors),
+                            exception))
             continue
         detail = f"mean {mean:.2f} over {n} scored"
         gate = gates.get(name)
         if gate:
             bound = ", ".join(f"{k}={gate[k]}" for k in ("min", "max") if k in gate)
             ok = gate_ok(mean, gate) and not errors
-            rows.append(Row(name, ok, f"{detail} (gate {bound})", True,
-                           exception="; ".join(errors) if errors else ""))
+            rows.append(Row(name, ok, f"{detail} (gate {bound})", True, exception))
+        elif errors:
+            # A raising scorer is always a RED row, gate or not.
+            rows.append(Row(name, False, f"{detail} (no gate)", True, exception))
         else:
-            rows.append(Row(name, None, f"{detail} (no gate — shown as info)", False,
-                            exception="; ".join(errors) if errors else ""))
+            rows.append(Row(name, None, f"{detail} (no gate — shown as info)", False))
     return rows
 
 
 def negative_control(scorers: list[tuple[str, object]], gates: dict[str, dict],
                      project: str | None = None) -> list[Row]:
     """Run the suite over the known-bad negctl bot; a suite that passes it is dead."""
-    if not any(gates.get(name) for name, _ in scorers):
-        return []
     from .trace import game_views
 
     data = game_views(NEGCTL)
     rows = run_suite(data, scorers, gates, "negctl", project=project)
-    live = any(r.gate and r.ok is False for r in rows)
+    broken = [r for r in rows if r.exception]
+    # Only clean gate failures on the bad bot count as "caught".
+    live = any(r.gate and r.ok is False and not r.exception for r in rows)
     for r in rows:
         r.name = f"negctl: {r.name}"
         if live:
             r.gate, r.ok = False, None  # red on the bad bot means live, not a failure
+    for r in broken:
+        # A raising scorer over the bad bot means the scorer broke, not caught it.
+        r.detail = f"{r.name} raised: {r.exception}"
+        r.name = "negative control (scorer error)"
+        r.gate, r.ok = True, False
     rows.insert(0, Row(
         "negative control", live,
         "your gates catch the always-vote-seat-0 bot" if live

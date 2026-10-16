@@ -17,13 +17,18 @@ practice:
 eval:
 	uv run python -m evals --runs $(or $(RUNS),runs/practice) $(if $(SEAT),--seat $(SEAT),) $(if $(TEAM),--team $(TEAM),) $(if $(LATEST),--latest $(LATEST),)
 
+# Suite files frozen by lock/unlock: make's wildcard keeps empty dirs working.
+FROZEN := $(wildcard evals/scorers/*.py) evals/gates.toml $(wildcard evals/datasets/*.jsonl)
+
 # Freeze the suite: agents can no longer edit evals/ (evals/.locked).
 lock:
 	touch evals/.locked
+	chmod -R a-w $(FROZEN)
 	@echo "evals/ locked: agents are blocked from editing it"
 
 # Unfreeze (humans only; the hook blocks agents from running this).
 unlock:
+	chmod -R u+w $(FROZEN)
 	rm -f evals/.locked
 	@echo "evals/ unlocked"
 
