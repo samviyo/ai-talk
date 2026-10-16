@@ -456,8 +456,9 @@ cmd = "uv run bot"                     # run inside the checkout
 - `bots/naive.py`: one LLM call per move through Bifrost (direct, env
   `BIFROST_BASE_URL` + `BIFROST_API_KEY`, OpenAI-compatible; the bot appends `/v1`
   to the bare origin itself), prompt-only.
-- `make eval-c4` runs the checks in the talk doc and prints a scoreboard, including the
-  always-column-0 negative control.
+- `make eval-c4` runs the team's own scorers (`connect4/team_evals/`) through Braintrust
+  `Eval()` and prints a scoreboard, including the always-column-0 negative control.
+  Our hidden suite lives in `reference/connect4/`.
 - `tournament.py`: round-robin between bot modules.
 
 ## Starter kit (`starter/`)

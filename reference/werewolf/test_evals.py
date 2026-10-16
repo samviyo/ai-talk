@@ -16,7 +16,7 @@ from evals import checks  # noqa: E402
 from evals.__main__ import evaluate  # noqa: E402
 from evals.trace import GameLog, iter_games, load_game  # noqa: E402
 
-FIXTURES = Path(__file__).parent / "fixtures" / "runs"
+FIXTURES = Path(__file__).parents[2] / "starter" / "tests" / "fixtures" / "runs"
 THRESHOLDS = tomllib.loads((ROOT / "evals" / "thresholds.toml").read_text())
 
 
