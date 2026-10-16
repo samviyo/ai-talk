@@ -153,6 +153,8 @@ async def _do(session: ClientSession, view: dict, turn: dict, action: dict) -> d
     args = dict(action.get("args") or {})
     if action["tool"] in ("post", "vote", "night_action", "buy"):
         args["turn_id"] = turn["turn_id"]
+        if action.get("reason"):
+            args["reason"] = action["reason"]
     result = await _call(session, action["tool"], args)
     if action["tool"] == "night_action" and view["role"] == "seer":
         # deferred: the result arrives as a seer_result announcement
@@ -204,6 +206,8 @@ async def _run_discussion(
             args = dict(action.get("args") or {})
             if action["tool"] != "react":
                 args["turn_id"] = turn["turn_id"]
+            if action.get("reason"):
+                args["reason"] = action["reason"]
             result = await _call(session, action["tool"], args)
             if result.get("error") in (
                 "too_fast", "no_posts_left", "broke", "stale_turn", "still_queued",
@@ -215,6 +219,8 @@ async def _run_discussion(
         if buy is not None:
             args = dict(buy.get("args") or {})
             args["turn_id"] = turn["turn_id"]
+            if buy.get("reason"):
+                args["reason"] = buy["reason"]
             await _call(session, "buy", args)
         nxt = await _call(
             session,

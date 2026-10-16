@@ -49,8 +49,12 @@ class AppState:
         hot_seat_s: float = 6.0,
         hot_seat_answer_s: float = 5.0,
         hot_seat_fine: float = 0.10,
+        reveal_s: float = 1.5,
+        beat_s: float = 2.5,
+        manual_start: bool = False,
     ) -> None:
         self.config = config
+        self.manual_start = manual_start
         self.budget_usd = budget_usd
         self.window_s = window_s
         self.runs_dir = runs_dir
@@ -92,6 +96,9 @@ class AppState:
                 hot_seat_s=hot_seat_s,
                 hot_seat_answer_s=hot_seat_answer_s,
                 hot_seat_fine=hot_seat_fine,
+                reveal_s=reveal_s,
+                beat_s=beat_s,
+                manual_start=manual_start,
             )
             self.tables.append(table)
             for s, tok in enumerate(tokens):

@@ -28,16 +28,24 @@ def seats_with(game: Game, role: str) -> list[int]:
 
 
 def end_night(game: Game) -> None:
-    """Close the open night window with abstentions."""
+    """Close the open night window with abstentions, draining the beat reveal."""
     assert game.phase == "night"
     for seat in sorted(game.pending()):
         game.abstain(seat)
+    while game.phase == "reveal":
+        game.advance_reveal()
 
 
 def end_discussion(game: Game, now: float = 0.0) -> None:
     """Close the open discussion window at its deadline."""
     assert game.phase == "day_discussion"
     game.close_discussion()
+
+
+def drain_reveal(game: Game) -> None:
+    """Play out any staged ballot/night-beat reveal."""
+    while game.phase == "reveal":
+        game.advance_reveal()
 
 
 def end_window(game: Game) -> None:
@@ -50,6 +58,8 @@ def end_window(game: Game) -> None:
             game.abstain(seat)
     elif game.phase == "day_discussion":
         game.close_discussion()
+    while game.phase == "reveal":
+        game.advance_reveal()
 
 
 def to_vote(game: Game) -> None:

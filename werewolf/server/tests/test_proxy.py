@@ -148,6 +148,8 @@ async def test_funded_wolf_decides_kill(tmp_path: Path):
             table._transition_until = 0.0
             table.window_opened -= 120.0
             await table.check_clock_locked()
+            while table.game.phase == "reveal":
+                table.game.advance_reveal()
         night = [e for e in table.game.events(None) if e.kind == "night_result"][-1]
         assert night.data["kill_target"] == target
     finally:

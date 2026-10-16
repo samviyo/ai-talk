@@ -47,6 +47,9 @@ def play(
                 now += step_s
             game.close_discussion()
             continue
+        if game.phase == "reveal":
+            game.advance_reveal()
+            continue
         for seat in sorted(game.pending()):
             obligation = game.pending()[seat]
             action = policy(game, seat, obligation, 0.0)

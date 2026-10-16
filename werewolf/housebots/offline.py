@@ -100,6 +100,9 @@ def play_game(seat_brains: list[str], seed: int) -> str:
         if game.phase == "day_discussion":
             _run_discussion(game, brains)
             continue
+        if game.phase == "reveal":
+            game.advance_reveal()
+            continue
         for seat in sorted(game.pending()):
             if seat not in game.alive():
                 game.abstain(seat)

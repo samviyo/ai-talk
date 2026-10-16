@@ -13,7 +13,14 @@ from werewolf.engine import (
     SeerCheck,
     Vote,
 )
-from werewolf.engine.tests.helpers import config, end_discussion, end_night, seats_with, to_vote
+from werewolf.engine.tests.helpers import (
+    config,
+    drain_reveal,
+    end_discussion,
+    end_night,
+    seats_with,
+    to_vote,
+)
 
 
 def _night_seats(game: Game) -> tuple[int, int, list[int], int]:
@@ -56,6 +63,8 @@ def test_once_per_day_and_per_game_limits() -> None:
 def _clear_night(game: Game) -> None:
     for seat in sorted(game.pending()):
         game.abstain(seat)
+    while game.phase == "reveal":
+        game.advance_reveal()
 
 
 def _skip_day(game: Game) -> None:
@@ -74,6 +83,8 @@ def test_frame_makes_target_read_wolf() -> None:
     for wolf in wolves:
         game.abstain(wolf)
     game.abstain(doctor)
+    while game.phase == "reveal":
+        game.advance_reveal()
     result = next(e for e in game.events(seer) if e.kind == "seer_result")
     assert result.data["role"] == "werewolf"
     assert game.role(villager) == "villager"  # the frame lies, the role doesn't
@@ -124,6 +135,7 @@ def test_double_vote_counts_twice_and_shows_weight() -> None:
             game.abstain(seat)
         else:
             game.act(seat, Vote(b))
+    drain_reveal(game)
     tally = next(e for e in game.events(None) if e.kind == "vote_tally")
     ballot = next(x for x in tally.data["ballots"] if x["seat"] == a)
     assert ballot["weight"] == 2

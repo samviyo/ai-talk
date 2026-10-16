@@ -61,6 +61,9 @@ async def start_server(
     transition_s: float = 0.0,
     transition_on_start: bool = True,
     discussion_s: float = 1.0,
+    reveal_s: float = 0.05,
+    beat_s: float = 0.05,
+    manual_start: bool = False,
 ) -> RunningServer:
     config = Config(
         seats=seats, wolves=2, max_days=5, seed=seed,
@@ -80,6 +83,9 @@ async def start_server(
         teams_toml=None,
         upstream_transport=transport,
         auto_restart=auto_restart,
+        reveal_s=reveal_s,
+        beat_s=beat_s,
+        manual_start=manual_start,
     )
     state.tables[0].transition_on_start = transition_on_start
     if not transition_on_start:

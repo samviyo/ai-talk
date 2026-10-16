@@ -8,7 +8,13 @@ import pytest
 
 from werewolf.engine import Game, Post, Vote
 from werewolf.engine.sim import play, random_policy
-from werewolf.engine.tests.helpers import config, end_night, seats_with, to_vote
+from werewolf.engine.tests.helpers import (
+    config,
+    drain_reveal,
+    end_night,
+    seats_with,
+    to_vote,
+)
 
 
 def to_discussion(game: Game) -> None:
@@ -61,6 +67,7 @@ def test_ballots_invisible_until_resolution() -> None:
             game.abstain(seat)
         else:
             game.act(seat, Vote(target))
+    drain_reveal(game)
     tally = next(e for e in game.events(first) if e.kind == "vote_tally")
     assert tally.data["eliminated"] == target
     assert any(

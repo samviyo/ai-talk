@@ -6,6 +6,7 @@ import asyncio
 import json
 import random
 import time
+from collections import Counter
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
@@ -96,6 +97,9 @@ class Table:
         hot_seat_s: float = 6.0,
         hot_seat_answer_s: float = 5.0,
         hot_seat_fine: float = DEFAULT_HOT_SEAT_FINE,
+        reveal_s: float = 1.5,
+        beat_s: float = 2.5,
+        manual_start: bool = False,
     ) -> None:
         self.name = name
         self.config = config
@@ -107,7 +111,12 @@ class Table:
         self.min_window_s = min_window_s
         self.transition_s = transition_s
         self.transition_on_start = transition_on_start
-        self.game_counter = 1  # the game opened in __init__ is game1
+        self.reveal_s = reveal_s
+        self.beat_s = beat_s
+        # manual_start waits in the lobby for /admin/start before game one opens
+        self.manual_start = manual_start
+        self.awaiting_start = manual_start
+        self.game_counter = 0 if manual_start else 1  # game one opens at __init__
         self.lock = asyncio.Lock()
         self.cond = asyncio.Condition(self.lock)
         self.game = Game(config)
@@ -153,14 +162,28 @@ class Table:
         self._speaking_seat: int | None = None
         self._cut_offs: list[dict[str, Any]] = []  # public, emit at day end
         self._hot_passes: list[dict[str, Any]] = []
+        self._reveal_until = 0.0  # staged ballot/night-beat clock
+        self._deaths: list[dict[str, Any]] = []  # per game, in order
+        self._game_started = False
+        if manual_start:
+            # The constructor's game is a placeholder; the lobby holds until start.
+            self.idle = True
+            self._run_written = True
+            self.frozen = True
+            self.need_role_check = True
+            self.ready_seats = set()
+            self.ready_event.clear()
 
     # --- game lifecycle ------------------------------------------------------
 
     def start_game_locked(self, seed: int | None = None, need_role_check: bool = False) -> None:
         """Open a fresh game; caller holds the lock."""
         if seed is None:
-            self._game_seq += 1
-            seed = self._base_seed + self.seed_step * self._game_seq
+            if self.manual_start and not self._game_started:
+                seed = self._base_seed  # lobby start replays the pinned seed
+            else:
+                self._game_seq += 1
+                seed = self._base_seed + self.seed_step * self._game_seq
         self.game_counter += 1
         self._run_written = False
         self._served_turn = {}
@@ -174,11 +197,14 @@ class Table:
         self._hot_day = 0
         self._cut_offs = []
         self._hot_passes = []
+        self._deaths = []
+        self._game_started = False
         self.game = Game(replace(self.config, seed=seed))
         self.game.floor_queued = True  # server floor owns release timing
         self.traces = []
         self.window_opened = time.monotonic()
         self.idle = False
+        self.awaiting_start = False
         # Every new game waits for each seat to call get_my_role once.
         self.need_role_check = True
         self.frozen = True
@@ -192,6 +218,8 @@ class Table:
         self._clocked_turn = self.game.turn_id
         self._released_at = time.monotonic()
         self._prev_phase = None
+        self._reveal_until = 0.0
+        # manual-start always lets the operator open the first window
         self._transition_until = (
             time.monotonic() + self.transition_s if self.transition_on_start else 0.0
         )
@@ -201,9 +229,35 @@ class Table:
         self._push_sse_locked(self.spectator_init())
         self._notify_sse_locked()
 
+    def mark_ready_locked(self, seat: int) -> None:
+        """A seat called get_my_role; in the lobby that only reports readiness."""
+        self.ready_seats.add(seat)
+        self._push_sse_locked(self.lobby_state())
+
+    def begin_locked(self) -> None:
+        """Operator start: unfreeze the ready game; caller holds the lock."""
+        self.unfreeze_locked()
+        self._game_started = True
+        self._push_sse_locked({"kind": "game_start", "game": self.game_counter})
+        self.cond.notify_all()
+
+    def lobby_state(self) -> dict[str, Any]:
+        return {
+            "kind": "lobby",
+            "seats": [
+                {
+                    "seat": s,
+                    "team": st.team,
+                    "house": st.house,
+                    "ready": s in self.ready_seats,
+                }
+                for s, st in enumerate(self.seats)
+            ],
+        }
+
     def unfreeze_locked(self) -> None:
         """Open the held first window with a fresh deadline; caller holds the lock."""
-        if not self.frozen:
+        if not self.frozen or self.awaiting_start:
             return
         self.frozen = False
         self.need_role_check = False
@@ -276,8 +330,23 @@ class Table:
             self._pump_floor_locked()
             self._check_hot_seat_locked(now)
         if (
+            not self.frozen
+            and self._reveal_until
+            and now >= self._reveal_until
+        ):
+            # staged ballot reveals and night beats step on the reveal clock
+            if g.phase == "reveal":
+                g.advance_reveal()
+            self._reveal_until = 0.0
+            self.note_window_locked()
+            if not self._reveal_until and g.phase == "reveal" and g.result is None:
+                # same phase, next beat: start a fresh reveal hold
+                if self._reveal_hold_s() > 0:
+                    self._reveal_until = time.monotonic() + self._reveal_hold_s()
+        elif (
             g.result is None
             and not self.frozen
+            and not self._reveal_until
             and now >= self.deadline()
         ):
             if g.phase == "day_discussion":
@@ -289,19 +358,42 @@ class Table:
                     self._pump_floor_locked()
                 else:
                     self._cut_off_and_close_locked()
-            else:
+            elif g.phase == "day_vote":
+                for seat in list(g.pending()):
+                    self._fallback_locked(seat)
+            elif g.phase == "night":
+                self._resolve_night_locked()
+            elif g.phase != "reveal":
                 for seat in list(g.pending()):
                     self._fallback_locked(seat)
             self.note_window_locked()
         self._write_run_if_done_locked()
         if (
             self.auto_restart
+            and not self.manual_start
             and not self.frozen
             and self.game.result is not None
             and not self.idle
         ):
             # Mark the gap; the next game opens on get_my_role readiness.
             self.idle = True
+        if (
+            self.manual_start
+            and self._game_started
+            and self.game.result is not None
+            and not self.idle
+        ):
+            self.idle = True
+            self.awaiting_start = True
+
+    def _resolve_night_locked(self) -> None:
+        """Advance every night obligation so the beat plan can be computed."""
+        g = self.game
+        pending = list(g.pending())
+        if not pending:
+            return  # already resolved; reveal beats step via check_clock_locked
+        for seat in pending:
+            self._fallback_locked(seat)
 
     def _write_run_if_done_locked(self) -> None:
         """Persist a finished game before any restart; caller holds the lock."""
@@ -313,6 +405,50 @@ class Table:
 
                 traceback.print_exc()
             self._run_written = True
+            summary = self.build_summary()
+            self._push_sse_locked(
+                {
+                    "kind": "game_over",
+                    "game": self.game_counter,
+                    "result": self.game.result,
+                    "summary": summary,
+                }
+            )
+            if self.manual_start:
+                # the table parks in the lobby until the next /admin/start
+                self.idle = True
+                self.awaiting_start = True
+
+    def build_summary(self) -> dict[str, Any]:
+        """Audience-facing game recap; persisted with the run."""
+        g = self.game
+        winners = sorted(s for s in g.alive() if (s in g._wolves) == (g.result == "wolves"))
+        accusations: Counter[int] = Counter()
+        powerups = 0
+        for e in g.events(None):
+            if e.kind == "posts_revealed":
+                for p in e.data["posts"]:
+                    if p.get("accuse") is not None:
+                        accusations[p["accuse"]] += 1
+            elif e.kind == "powerup":
+                powerups += 1
+        broke = [s for s in range(g.config.seats) if self.is_broke(s)]
+        return {
+            "winners": winners,
+            "wolves": sorted(g._wolves),
+            "deaths": list(self._deaths),
+            "spend_total": round(sum(self.seats[s].spent_usd for s in range(g.config.seats)), 6),
+            "broke_seats": broke,
+            "most_accused": accusations.most_common(1)[0][0] if accusations else None,
+            "powerups": powerups,
+        }
+
+    def _reveal_hold_s(self) -> float:
+        """Votes pace at reveal_s, night beats at beat_s."""
+        plan = self.game._beat_plan
+        if plan and "vote" in plan[0]:
+            return self.reveal_s
+        return self.beat_s
 
     def note_window_locked(self) -> None:
         """Start the window deadline the moment the engine's turn_id changes."""
@@ -326,6 +462,14 @@ class Table:
             if self.game.phase not in ("day_discussion", "defence"):
                 self._hot_active = None
             self._prev_phase = self.game.phase
+            if self.game.phase == "reveal":
+                # the staged reveal holds the next window
+                hold = self._reveal_hold_s()
+                if hold > 0:
+                    self._reveal_until = time.monotonic() + hold
+                    self._transition_until = max(
+                        self._transition_until, time.monotonic() + hold
+                    )
 
     # --- the discussion floor -------------------------------------------------
 
@@ -719,6 +863,7 @@ class Table:
             "remaining_s": remaining,
             "held_s": held,
             "transition": self.transition_active(),
+            "lobby": self.awaiting_start,
             "window_s": window,
             "pending": sorted(g.pending()) if g.result is None else [],
             "thinking": [s for s, st in enumerate(self.seats) if st.llm_busy],
@@ -736,10 +881,26 @@ class Table:
     def _notify_sse_locked(self) -> None:
         events = self.game.events(None)
         for e in events[self.sse_seq :]:
-            payload = {"kind": "event", **e.to_dict()}
+            if e.kind == "death":
+                self._deaths.append(
+                    {"seat": e.data["seat"], "day": e.day, "cause": e.data["cause"]}
+                )
+            payload = self._sse_event_payload(e)
+            if payload is None:
+                continue
             for q in self.sse_subs:
                 q.put_nowait(payload)
         self.sse_seq = len(events)
+
+    def _sse_event_payload(self, e: Event) -> dict[str, Any] | None:
+        """Top-level SSE shape per engine event; beats never carry day/round."""
+        if e.kind == "phase":
+            return {"kind": "phase", **e.data, "day": e.day, "round": e.round}
+        if e.kind in ("ballot_cast", "night_acted", "ballot_reveal", "night_beat", "thought"):
+            return {"kind": e.kind, **e.data}
+        if e.kind == "posts_revealed":
+            return {"kind": "posts_revealed", "posts": e.data["posts"]}
+        return {"kind": "event", **e.to_dict()}
 
     def spend_snapshot(self) -> dict[int, dict[str, Any]]:
         return {
@@ -748,6 +909,15 @@ class Table:
         }
 
     # --- charge / broke --------------------------------------------------------
+
+    def record_thought_locked(self, seat: int, reason: str | None) -> None:
+        """Hole cam: one audience-only line, kept for the retro."""
+        if not reason:
+            return
+        text = str(reason)[:200]
+        entry = {"seat": seat, "day": self.game.day, "phase": self.game.phase, "text": text}
+        self._thoughts.append(entry)
+        self.game.record_reason(seat, text)
 
     def charge_locked(self, seat: int, usd: float) -> None:
         st = self.seats[seat]
@@ -777,7 +947,9 @@ class Table:
         g = self.game
         out: list[dict[str, Any]] = []
         for e in g.events(None):
-            if e.kind == "posts_revealed":
+            if e.kind in ("ballot_cast", "night_acted", "ballot_reveal", "night_beat", "thought"):
+                out.append({"kind": e.kind, "day": e.day, **e.data})
+            elif e.kind == "posts_revealed":
                 for p in e.data["posts"]:
                     out.append(
                         {
@@ -867,6 +1039,7 @@ class Table:
                     },
                     "events": events,
                     "thoughts": self._thoughts,
+                    "summary": self.build_summary(),
                     "spend": {
                         str(s): round(self.seats[s].spent_usd, 6)
                         for s in range(g.config.seats)
@@ -883,18 +1056,18 @@ class Table:
     async def finish_and_maybe_restart(self) -> None:
         """Finale path: write the run once; no auto-restart in final games."""
         async with self.cond:
-            if self.game.result is not None and not self._run_written:
-                self.write_run()
-                self._run_written = True
-                self._notify_sse_locked()
-                self.cond.notify_all()
+            self._write_run_if_done_locked()
+            self.cond.notify_all()
 
 
 async def ticker(table: Table) -> None:
     """1s clock: applies deadlines and marks finished games idle."""
     while True:
-        # Wake at the release instant too, so held windows start on time.
-        await asyncio.sleep(min(1.0, max(0.05, table.release_at() - time.monotonic())))
+        # Wake at the release/reveal instant too, so held windows start on time.
+        wake = table.release_at()
+        if table._reveal_until:
+            wake = min(wake, table._reveal_until)
+        await asyncio.sleep(min(1.0, max(0.05, wake - time.monotonic())))
         try:
             async with table.cond:
                 await table.check_clock_locked()

@@ -25,6 +25,9 @@ def play_night(game: Game, kills: dict[int, int], save: int | None) -> None:
         game.abstain(doctor)
     else:
         game.act(doctor, DoctorSave(save))
+    # drain the staged beat reveal so dawn lands
+    while game.phase == "reveal":
+        game.advance_reveal()
 
 
 def test_plurality_kill() -> None:
@@ -120,6 +123,10 @@ def test_seer_result_deferred_until_night_resolves() -> None:
     assert not any(e.kind == "seer_result" for e in game.events(seer))
     for seat in sorted(game.pending()):
         game.abstain(seat)
+    # staged beats: no result until the seer's own beat plays
+    assert not any(e.kind == "seer_result" for e in game.events(seer))
+    while game.phase == "reveal":
+        game.advance_reveal()
     result = next(e.data for e in game.events(seer) if e.kind == "seer_result")
     assert result == {"seer": seer, "seat": wolf, "role": "werewolf"}
     others = [s for s in game.alive() if s != seer]

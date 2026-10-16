@@ -97,6 +97,7 @@ async def _kill_group(proc: asyncio.subprocess.Process, grace_s: float = 3.0) ->
 async def run_final(
     toml_path: Path, check: bool, port: int, budget_usd: float, linger: bool = True,
     min_window_s: float = 10.0, transition_s: float = 6.0,
+    reveal_s: float = 1.5, beat_s: float = 2.5, manual_start: bool = True,
 ) -> int:
     seats_n, seed, teams = load_final(toml_path)
     if not teams:
@@ -153,6 +154,7 @@ async def run_final(
         auto_restart=False,
         min_window_s=min_window_s, transition_s=transition_s,
         house_prices=house_prices or None, powerup_prices=powerup_prices or None,
+        reveal_s=reveal_s, beat_s=beat_s, manual_start=manual_start,
     )
     table = state.tables[0]
     for i, st in enumerate(table.seats):
@@ -161,7 +163,9 @@ async def run_final(
         if assignment[i] == "house":
             st.house = "baseline"  # finale house seats run the baseline brain
     state.token_index = {tok: (table, s) for s, tok in enumerate(tokens)}
-    table.start_game_locked(seed=seed, need_role_check=True)
+    if not manual_start:
+        # manual_start leaves the constructor's placeholder lobby game parked
+        table.start_game_locked(seed=seed, need_role_check=True)
 
     import uvicorn
 
@@ -253,8 +257,10 @@ async def run_final(
         procs[s] = await launch(s)
         watch_exit(s, procs[s])
     async with table.cond:
-        # Open the first window only after readiness/replacement is complete.
-        table.unfreeze_locked()
+        # Open the first window only after readiness/replacement is complete;
+        # manual-start holds in the lobby for /admin/start instead.
+        if not table.manual_start:
+            table.unfreeze_locked()
         table.cond.notify_all()
 
     # wait for the game to finish: poll the table
