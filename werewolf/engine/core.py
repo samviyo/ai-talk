@@ -9,12 +9,15 @@ from dataclasses import dataclass, field
 from typing import Any, Literal, TypeAlias
 
 Role: TypeAlias = Literal["werewolf", "seer", "doctor", "villager"]
-Phase: TypeAlias = Literal["night", "day_discussion", "defence", "day_vote", "over"]
+Phase: TypeAlias = Literal[
+    "night", "day_discussion", "defence", "day_vote", "reveal", "over"
+]
 Result: TypeAlias = Literal["village", "wolves", "draw"]
 Obligation: TypeAlias = Literal["night_kill", "seer_check", "doctor_save", "defence", "vote"]
 
 ROLES: tuple[str, ...] = ("werewolf", "seer", "doctor", "villager")
 POST_MAX = 280
+REASON_MAX = 200
 WOLF_CHAT_MAX = 500
 WHISPER_MAX = 280
 MIN_POST_GAP_S = 5.0
@@ -160,6 +163,12 @@ class Game:
         self._bought_today: dict[int, set[str]] = {}
         self._double_voters: set[int] = set()
         self._whispers: list[dict[str, Any]] = []  # delivered when the window closes
+        self._beat_plan: list[dict[str, Any]] = []  # staged night beats left to emit
+        self._beat_kill_votes: list[int] = []
+        self._beat_save: int | None = None
+        self._beat_seer_checks: dict[int, int] = {}
+        self._vote_ballots: list[dict[str, Any]] = []  # ballots behind the reveal
+        self._beat_tally: Counter[int] = Counter()  # running tally across reveals
         self.phase: Phase = "night"
         self.day = 1
         self.round = 0
@@ -283,10 +292,10 @@ class Game:
                 self._maybe_close()
         elif isinstance(action, Vote):
             self._ballots[seat] = action
-            weight = 2 if seat in self._double_voters else 1
+            # the projector shows who voted, not how; targets land at the reveal
             self._emit(
-                "ballot",
-                {"seat": seat, "target": action.target, "weight": weight},
+                "ballot_cast",
+                {"seat": seat},
                 audience=frozenset(),
             )
             self._maybe_close()
@@ -373,10 +382,21 @@ class Game:
         self._emit_mentions(seat, post)
 
     def _emit_night_action(self, seat: int, action: str, target: int) -> None:
-        """Audience-only beat so the projector shows the night unfolding."""
+        """Audience-only progress ping; targets stay hidden until the staged beat."""
         self._emit(
-            "night_action",
-            {"seat": seat, "role": self._roles[seat], "action": action, "target": target},
+            "night_acted",
+            {"seat": seat},
+            audience=frozenset(),
+        )
+
+    def record_reason(self, seat: int, reason: str) -> None:
+        """Audience-only hole-cam line; rejected once a seat is dead."""
+        self._check_seat(seat)
+        if not self._alive[seat]:
+            return
+        self._emit(
+            "thought",
+            {"seat": seat, "text": reason[:REASON_MAX]},
             audience=frozenset(),
         )
 
@@ -558,15 +578,19 @@ class Game:
         self._flush_whispers()
         if self.phase == "night":
             self._resolve_night()
-            if self.result is None:
+            # a non-empty beat plan opens the reveal phase; dawn follows it
+            if self.result is None and self.phase == "night":
                 self._start_day()
                 self._open_window("day_discussion")
         elif self.phase == "defence":
             self._next_defence()
         elif self.phase == "day_vote":
             self._resolve_vote()
-            if self.result is None:
+            # a non-empty ballot plan opens the reveal phase; the day ends after it
+            if self.result is None and self.phase == "day_vote":
                 self._finish_day()
+        elif self.phase == "reveal":
+            self.advance_reveal()
 
     def close_discussion(self) -> None:
         """Timed close of the discussion window: pick nominees, open defences."""
@@ -620,8 +644,78 @@ class Game:
         save = next(
             (a.target for a in self._ballots.values() if isinstance(a, DoctorSave)), None
         )
-        for seer, target in self._seer_checks.items():
+        seer_checks = dict(self._seer_checks)
+        # beats and resolutions must interleave, so the seer loop runs at reveal
+        self._beat_kill_votes = kill_votes
+        self._beat_save = save
+        self._beat_seer_checks = seer_checks
+        self._beat_plan = self._plan_night_beats(kill_votes, save, seer_checks)
+        if self._beat_plan:
+            self._open_window("reveal")
+            return
+        self._finish_night(kill_votes, save, seer_checks)
+
+    def _plan_night_beats(
+        self, kill_votes: list[int], save: int | None, seer_checks: dict[int, int]
+    ) -> list[dict[str, Any]]:
+        """Audience-only night reveal; skips abstained or dead roles."""
+        plan: list[dict[str, Any]] = []
+        if kill_votes:
+            counts = Counter(kill_votes)
+            top = max(counts.values())
+            tied = sorted(t for t, c in counts.items() if c == top)
+            plan.append({"step": "wolves", "target": self._rng.choice(tied)})
+        if save is not None:
+            plan.append({"step": "doctor", "target": save})
+        for seer, target in seer_checks.items():
             role: Role = "werewolf" if target in self._frames else self._roles[target]
+            plan.append({"step": "seer", "seer": seer, "target": target, "role": role})
+        return plan
+
+    def advance_reveal(self) -> None:
+        """Emit the next staged beat; the table calls this on the hold clock."""
+        if self.phase != "reveal":
+            raise IllegalAction("not_your_turn", "no reveal in progress")
+        step = self._beat_plan.pop(0)
+        if "vote" in step:
+            b = step["vote"]
+            self._beat_tally[b["target"]] += b["weight"]
+            self._emit(
+                "ballot_reveal",
+                {
+                    "seat": b["seat"],
+                    "target": b["target"],
+                    "weight": b["weight"],
+                    "tally": {str(t): c for t, c in sorted(self._beat_tally.items())},
+                },
+                audience=frozenset(),
+            )
+            if not self._beat_plan:
+                self._finish_vote(self._vote_ballots)
+            return
+        self._emit("night_beat", step, audience=frozenset())
+        if step["step"] == "seer":
+            self._emit(
+                "seer_result",
+                {"seer": step["seer"], "seat": step["target"], "role": step["role"]},
+                audience=frozenset({step["seer"]}),
+            )
+        if not self._beat_plan:
+            self._finish_night(
+                self._beat_kill_votes, self._beat_save, self._beat_seer_checks
+            )
+
+    def _finish_night(
+        self, kill_votes: list[int], save: int | None, seer_checks: dict[int, int]
+    ) -> None:
+        for seer, target in seer_checks.items():
+            role: Role = "werewolf" if target in self._frames else self._roles[target]
+            if any(
+                e.kind == "seer_result" and e.data.get("seer") == seer
+                and e.day == self.day
+                for e in self._events
+            ):
+                continue  # a seer beat already delivered this result
             self._emit(
                 "seer_result",
                 {"seer": seer, "seat": target, "role": role},
@@ -649,6 +743,10 @@ class Game:
             self._emit("no_death", {"cause": "night"})
         self._shields = set()  # a shield protects one night only
         self._check_end()
+        if self.result is None and self.phase == "reveal":
+            # the staged beat ends the night; dawn follows the last beat
+            self._start_day()
+            self._open_window("day_discussion")
 
     def _resolve_vote(self) -> None:
         ballots = []
@@ -656,27 +754,41 @@ class Game:
             target = self._ballots[s].target if s in self._ballots else None
             weight = 2 if s in self._double_voters and target is not None else 1
             ballots.append({"seat": s, "target": target, "weight": weight})
-        totals: Counter[int] = Counter()
+        reveal = [b for b in ballots if b["target"] is not None]
+        self._rng.shuffle(reveal)
+        if reveal:
+            # stage the ballot reveals on the reveal clock; tally and death follow
+            self._vote_ballots = ballots
+            self._beat_plan = [{"vote": b} for b in reveal]
+            self._beat_tally = Counter()
+            self._open_window("reveal")
+            return
+        self._finish_vote(ballots)
+
+    def _finish_vote(self, ballots: list[dict[str, Any]]) -> None:
+        tally: Counter[int] = Counter()
         for b in ballots:
             if b["target"] is not None:
-                totals[b["target"]] += b["weight"]
+                tally[b["target"]] += b["weight"]
         eliminated = None
-        if totals:
-            top = max(totals.values())
-            tied = sorted(t for t, c in totals.items() if c == top)
+        if tally:
+            top = max(tally.values())
+            tied = sorted(t for t, c in tally.items() if c == top)
             # a tie eliminates nobody, unlike the night's seeded tie-break
             if len(tied) == 1:
                 eliminated = tied[0]
-        tally = {"ballots": ballots, "eliminated": eliminated}
+        result = {"ballots": ballots, "eliminated": eliminated}
         silent = self._silent_seats()
         if silent:
-            tally["silent"] = silent
-        self._emit("vote_tally", tally)
+            result["silent"] = silent
+        self._emit("vote_tally", result)
         if eliminated is not None:
             self._kill(eliminated, "vote")
         else:
             self._emit("no_death", {"cause": "vote"})
         self._check_end()
+        if self.result is None and self.phase == "reveal":
+            self._finish_day()
 
     def _start_day(self) -> None:
         self._posts_today = Counter()
@@ -700,6 +812,7 @@ class Game:
             pending: dict[int, Obligation] = {}
             self._seer_checks = {}
             self._frames = {}
+            self._beat_plan = []
             # shields persist from the day into the night; cleared after it resolves
             for s in self.alive():
                 role = self._roles[s]
@@ -711,6 +824,8 @@ class Game:
                     pending[s] = "doctor_save"
             self._pending = pending
         elif self.phase == "day_discussion":
+            self._pending = {}
+        elif self.phase == "reveal":
             self._pending = {}
         elif self.phase == "defence":
             assert defence_seat is not None

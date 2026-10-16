@@ -78,6 +78,9 @@ def build_state(args: argparse.Namespace) -> AppState:
         transition_s=args.transition_s,
         house_prices=house_prices or None,
         powerup_prices=powerup_prices or None,
+        reveal_s=args.reveal_s,
+        beat_s=args.beat_s,
+        manual_start=args.manual_start,
     )
 
 
@@ -186,8 +189,28 @@ def cmd_final(args: argparse.Namespace) -> int:
             Path(args.toml), check=args.check, port=args.port,
             budget_usd=args.budget_usd,
             min_window_s=args.min_window_s, transition_s=args.transition_s,
+            reveal_s=args.reveal_s, beat_s=args.beat_s,
+            manual_start=not args.auto_start,
         )
     )
+
+
+def cmd_start(args: argparse.Namespace) -> int:
+    """Operator: start a manual-start table waiting in the lobby."""
+    import json
+
+    import httpx
+
+    token_file = args.token_file or str(Path(args.runs_dir) / "tokens.json")
+    operator = json.loads(Path(token_file).read_text()).get("operator")
+    resp = httpx.post(
+        f"{args.server}/admin/start", params={"op": operator}, timeout=10
+    )
+    if resp.status_code != 200:
+        print(f"start refused: {resp.status_code} {resp.text}")
+        return 1
+    print(f"game {resp.json()['game']} started")
+    return 0
 
 
 def main() -> int:
@@ -207,12 +230,21 @@ def main() -> int:
         p.add_argument("--fake-llm", action="store_true")
         p.add_argument("--discussion-s", type=float, default=None)
         p.add_argument("--max-posts", type=int, default=None)
+        p.add_argument("--reveal-s", type=float, default=1.5)
+        p.add_argument("--beat-s", type=float, default=2.5)
 
     p_serve = sub.add_parser("serve")
     common(p_serve)
     p_serve.add_argument("--host", default="127.0.0.1")
     p_serve.add_argument("--port", type=int, default=8000)
     p_serve.add_argument("--quiet", action="store_true")
+    # practice starts as soon as seats are ready; the finale waits for the operator
+    p_serve.add_argument(
+        "--manual-start",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="hold the lobby until POST /admin/start (default off for serve)",
+    )
     p_serve.set_defaults(func=cmd_serve)
 
     p_tokens = sub.add_parser("tokens")
@@ -235,7 +267,17 @@ def main() -> int:
     p_final.add_argument("--budget-usd", type=float, default=0.50)
     p_final.add_argument("--min-window-s", type=float, default=10.0)
     p_final.add_argument("--transition-s", type=float, default=6.0)
+    p_final.add_argument("--reveal-s", type=float, default=1.5)
+    p_final.add_argument("--beat-s", type=float, default=2.5)
+    # the finale holds in the lobby until the operator starts it
+    p_final.add_argument("--auto-start", action="store_true")
     p_final.set_defaults(func=cmd_final)
+
+    p_start = sub.add_parser("start")
+    p_start.add_argument("--server", required=True)
+    p_start.add_argument("--token-file", default="")
+    p_start.add_argument("--runs-dir", default="runs")
+    p_start.set_defaults(func=cmd_start)
 
     args = parser.parse_args()
     return args.func(args)

@@ -261,6 +261,9 @@ async def test_all_broke_wolves_single_kill(tmp_path: Path):
             table._transition_until = 0.0
             table.window_opened -= 120.0
             await table.check_clock_locked()
+            # night resolution opens the staged reveal; drain it to dawn
+            while table.game.phase == "reveal":
+                table.game.advance_reveal()
         # the spec's "one random legal kill", not one ballot per wolf
         tally = [e for e in table.game.events(None) if e.kind == "night_result"][0]
         assert tally.data["kill_target"] is not None
@@ -404,11 +407,15 @@ async def test_min_window_s_paces_instant_bots(tmp_path: Path):
         bots = asyncio.gather(
             *(run_bot(srv.url, srv.token(i), "baseline", 200 + i) for i in range(7))
         )
-        # the dwell applies between windows regardless of bot speed
-        while len(opens) < 4 and table.game.result is None:
+        # reveal windows step on their own short clock; the dwell gates real turns
+        def _turns() -> list[tuple[str, float]]:
+            return [o for o in opens if not o[0].startswith("reveal:")]
+
+        while len(_turns()) < 4 and table.game.result is None:
             await asyncio.sleep(0.2)
         bots.cancel()
-        gaps = [b[1] - a[1] for a, b in zip(opens, opens[1:])]
+        turns = _turns()
+        gaps = [b[1] - a[1] for a, b in zip(turns, turns[1:])]
         assert len(gaps) >= 2, f"too few windows opened: {opens}"
         assert all(g >= 1.9 for g in gaps), gaps
     finally:

@@ -24,6 +24,7 @@ RATE_LIMIT_S = 1.0
 BUDGET_EXEMPT = {"wait_for_turn", "read_board"}
 
 S = {"type": "integer"}
+REASON = {"type": "string", "maxLength": 200}
 TOOLS: list[tuple[str, dict[str, Any], list[str]]] = [
     (
         "wait_for_turn",
@@ -42,11 +43,16 @@ TOOLS: list[tuple[str, dict[str, Any], list[str]]] = [
             "reply_to": S,
             "nominate": S,
             "second": S,
+            "reason": REASON,
         },
         ["turn_id", "chat"],
     ),
-    ("vote", {"turn_id": {"type": "string"}, "seat": S}, ["turn_id", "seat"]),
-    ("night_action", {"turn_id": {"type": "string"}, "target": S}, ["turn_id", "target"]),
+    ("vote", {"turn_id": {"type": "string"}, "seat": S, "reason": REASON}, ["turn_id", "seat"]),
+    (
+        "night_action",
+        {"turn_id": {"type": "string"}, "target": S, "reason": REASON},
+        ["turn_id", "target"],
+    ),
     ("wolf_chat", {"msg": {"type": "string"}}, ["msg"]),
     ("read_wolf_chat", {"since": S}, []),
     ("get_budget", {}, []),
@@ -58,6 +64,7 @@ TOOLS: list[tuple[str, dict[str, Any], list[str]]] = [
             "item": {"type": "string"},
             "target": S,
             "msg": {"type": "string"},
+            "reason": REASON,
         },
         ["turn_id", "item"],
     ),
@@ -155,9 +162,12 @@ class Dispatcher:
             over = table.game.result is not None
             if name == "get_my_role":
                 # In the idle gap, this call opens the next game for this seat.
-                if table.idle:
+                if table.idle and not table.manual_start:
                     table.start_game_locked()
-                table.ready_seats.add(seat)
+                if table.manual_start and not table.awaiting_start:
+                    # parked lobby: nothing to ready until the next game ends
+                    return _err("not_your_turn", "a game is already running")
+                table.mark_ready_locked(seat)
                 if len(table.ready_seats) == table.config.seats:
                     table.ready_event.set()
                     table.unfreeze_locked()
@@ -195,11 +205,24 @@ class Dispatcher:
     ) -> dict[str, Any]:
         timeout = min(float(args.get("timeout_s") or WAIT_DEFAULT_S), WAIT_MAX_S)
         deadline = time.monotonic() + timeout
+
+        def _remaining() -> float:
+            return deadline - time.monotonic()
+
         async with table.cond:
             while True:
                 await table.check_clock_locked()
                 g = table.game
                 table._notify_sse_locked()
+                if table.awaiting_start and not table._game_started:
+                    # lobby: no game has begun yet; wake on /admin/start
+                    if _remaining() <= 0:
+                        return {"status": "waiting", "lobby": True}
+                    try:
+                        await asyncio.wait_for(table.cond.wait(), timeout=_remaining())
+                    except TimeoutError:
+                        return {"status": "waiting", "lobby": True}
+                    continue
                 if g.result is not None:
                     if table.idle:
                         # Each seat hears "over" once, then the gap reports idle.
@@ -276,6 +299,9 @@ class Dispatcher:
 
     def _role(self, table: Table, seat: int) -> dict[str, Any]:
         g = table.game
+        if table.awaiting_start and not table._game_started:
+            # lobby placeholder: the role card is dealt only once the game starts
+            return {"seat": seat, "role": None, "partners": [], "lobby": True}
         role = g.role(seat)
         partners: list[int] = []
         if role == "werewolf":
@@ -312,6 +338,7 @@ class Dispatcher:
         stale = self._check_turn_id(table, args)
         if stale is not None:
             return stale
+        table.record_thought_locked(seat, args.get("reason"))
         try:
             table.game.act(
                 seat,
@@ -334,6 +361,7 @@ class Dispatcher:
         stale = self._check_turn_id(table, args)
         if stale is not None:
             return stale
+        table.record_thought_locked(seat, args.get("reason"))
         try:
             table.game.act(seat, Vote(target=int(args.get("seat"))))
         except (IllegalAction, TypeError, ValueError) as e:
@@ -348,6 +376,7 @@ class Dispatcher:
         stale = self._check_turn_id(table, args)
         if stale is not None:
             return stale
+        table.record_thought_locked(seat, args.get("reason"))
         target = args.get("target")
         obligation = table.game.pending().get(seat)
         try:
@@ -429,6 +458,7 @@ class Dispatcher:
         if price > remaining + 1e-9:
             # Rejected buys charge nothing; the engine never sees them.
             return _err("insufficient_budget", f"{item} costs ${price:.2f}")
+        table.record_thought_locked(seat, args.get("reason"))
         try:
             table.game.apply_powerup(
                 seat,

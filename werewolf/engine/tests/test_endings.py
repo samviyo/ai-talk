@@ -10,6 +10,7 @@ from werewolf.engine import Config, Game, NightKill, Post, SeerCheck, Vote
 from werewolf.engine.sim import play, random_policy
 from werewolf.engine.tests.helpers import (
     config,
+    drain_reveal,
     end_night,
     seats_with,
     to_vote,
@@ -46,6 +47,7 @@ def _nominate_and_vote(game: Game, target: int) -> None:
             game.abstain(seat)
         else:
             game.act(seat, Vote(target))
+    drain_reveal(game)
 
 
 def test_village_wins_when_wolves_dead() -> None:
@@ -72,6 +74,8 @@ def test_wolves_win_on_parity() -> None:
         game.act(wolf, NightKill(kill_target))
         for seat in sorted(game.pending()):
             game.abstain(seat)
+        while game.phase == "reveal":
+            game.advance_reveal()
 
     clear_night(town[0])
     lynch = next(s for s in game.alive() if s != wolf)
@@ -112,6 +116,7 @@ def test_vote_tie_eliminates_nobody() -> None:
         game.act(seat, Vote(b))
     for seat in voters[2 * half :]:
         game.abstain(seat)
+    drain_reveal(game)
     tally = next(e for e in game.events(None) if e.kind == "vote_tally")
     assert tally.data["eliminated"] is None
     assert a in game.alive() and b in game.alive()
@@ -126,6 +131,7 @@ def test_zero_ballots_eliminate_nobody() -> None:
     to_vote(game)
     for seat in sorted(game.pending()):
         game.abstain(seat)
+    drain_reveal(game)
     tally = next(e for e in game.events(None) if e.kind == "vote_tally")
     assert tally.data["eliminated"] is None
     assert all(b["target"] is None for b in tally.data["ballots"])

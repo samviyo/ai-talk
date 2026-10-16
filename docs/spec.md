@@ -41,7 +41,7 @@ rejects `seats < 2 * wolves + 3`. Roles are assigned by a shuffle from `seed`.
 
 ```python
 Role = Literal["werewolf", "seer", "doctor", "villager"]
-Phase = Literal["night", "day_discussion", "day_vote", "over"]
+Phase = Literal["night", "day_discussion", "defence", "day_vote", "reveal", "over"]
 
 @dataclass(frozen=True)
 class Config:
@@ -148,9 +148,17 @@ Implementation decisions where this spec was silent:
   reveals nothing.
 - `powerup` events are audience {buyer}; `whisper` events are audience {buyer, target};
   both appear in the omniscient spectator feed.
-- Omniscient-only beats: `night_action{seat,role,action,target}` on each accepted night
-  action, `night_abstain{seat,role}` on a clock-defaulted night obligation, and
-  `ballot{seat,target,weight}` on each accepted vote. No seat ever receives them.
+- Omniscient-only beats: `night_acted{seat}` on each accepted night action,
+  `night_abstain{seat,role}` on a clock-defaulted night obligation, and
+  `ballot_cast{seat}` on each accepted vote. Targets stay hidden until the staged
+  reveal. No seat ever receives them.
+- **Staged reveals.** The vote closes, holds for `--reveal-s` (default 1.5) per cast
+  ballot, and emits one `ballot_reveal{seat,target,weight,tally}` in seeded-random order
+  before `vote_tally` and any death. Night resolves into a `reveal` phase that emits
+  `night_beat{step:"wolves",target}`, `{step:"doctor",target}` and
+  `{step:"seer",seer,target,role}` about `--beat-s` (default 2.5) apart, skipping a step
+  whose role abstained or is dead, before dawn. Both holds show in the spectator tick as
+  `held_s>0`; `wait_for_turn` keeps returning `{status:"waiting"}` while held.
 
 **End.** No wolves alive → `village`. Wolves ≥ non-wolves → `wolves`. If day `max_days`
 ends with neither, the result is `draw`.
@@ -173,13 +181,15 @@ and phase advance per table under one lock.
 | `wait_for_turn(timeout_s=25)` | Server caps the wait at 3.5s (httpx's default 5s read timeout). Each (seat, window) is served once; a re-poll blocks until the next window. Returns `{turn_id, phase, day, round, you_owe, legal_targets, announcements, deadline_s}`, or `{status:"waiting"}` on timeout, or `{status:"over", result}`. Between games (auto-restart on) it returns `{status:"idle", result}` after each seat has heard `over` once; the next game opens frozen until every seat calls `get_my_role`. Wakes immediately when a window opens for this seat. The only moderator channel |
 | `get_my_role()` | `{seat, role, partners}`. `partners` is empty unless werewolf |
 | `read_board(since=0)` | `{posts:[{id, seat, day, chat, claimed_role, accuse, reply_to}], next, discussion_ends_in_s}`. Posts are live during discussion |
-| `post(turn_id, chat, claimed_role?, accuse?, reply_to?, nominate?, second?)` | `{ok, posts_left}`; `too_fast` inside the 5s gap, `no_posts_left` past `max_posts` |
-| `vote(turn_id, seat)` | `{ok}` |
-| `night_action(turn_id, target)` | `{ok}`. A seer's result arrives as the `seer_result` announcement when night resolves (see Power-ups) |
+| `post(turn_id, chat, claimed_role?, accuse?, reply_to?, nominate?, second?, reason?)` | `{ok, posts_left}`; `too_fast` inside the 5s gap, `no_posts_left` past `max_posts` |
+| `vote(turn_id, seat, reason?)` | `{ok}` |
+| `night_action(turn_id, target, reason?)` | `{ok}`. A seer's result arrives as the `seer_result` announcement when night resolves (see Power-ups) |
 | `wolf_chat(msg)` / `read_wolf_chat(since=0)` | Werewolves only; others get `not_your_turn`. Read returns `{messages:[{id, seat, day, msg}], next}` |
 | `get_budget()` | `{spent_usd, limit_usd, remaining_usd, broke}` |
 | `shop()` | `{items: [{item, price_usd, available, reason?}], remaining_usd}` |
-| `buy(turn_id, item, target?, msg?)` | `{ok, remaining_usd}`; `insufficient_budget`, `already_bought`, `not_available`, `invalid_target`, `too_long` |
+| `buy(turn_id, item, target?, msg?, reason?)` | `{ok, remaining_usd}`; `insufficient_budget`, `already_bought`, `not_available`, `invalid_target`, `too_long` |
+
+`reason` is the hole cam: audience-only, ≤200 chars, never in any seat response.
 
 Announcements are structured dicts, never free text: `{kind: "death", seat, role, cause:
 "night"|"vote"}`, `{kind: "no_death", cause}`, `{kind: "seer_result", seat, role}` (to the
@@ -204,7 +214,8 @@ Server rules:
   crosses night↔day. The window's deadline is `release + window_s`; while held,
   `wait_for_turn` returns `{status:"waiting"}` and no fallback can fire. The spectator
   tick reports `held_s` (seconds until release) and `transition` (true during a
-  phase-change hold); `remaining_s` stays at the full `window_s` while held.
+  phase-change hold); `remaining_s` stays at the full `window_s` while held. The tick
+  also carries `lobby: true` while a manual-start table waits for `/admin/start`.
 - Missed deadline: a funded seat abstains. A broke or dead-process seat gets the
   fallback below.
 - The leak test scans every MCP response, including errors and announcements, for every
@@ -283,6 +294,9 @@ spectator sees every purchase as it happens. The leak test covers `powerup` and
   10-calls-per-window budget.
 - `game.json` events gain `{kind:"powerup", seat, item, target, usd}` and
   `{kind:"whisper", seat, target, msg}`. `spend` stays the total per seat, LLM plus items.
+  The staged beats are recorded too: `{kind:"ballot_cast"|"night_acted", seat, day}`,
+  `{kind:"ballot_reveal", seat, target, weight, tally, day}` and
+  `{kind:"night_beat", step, ..., day}`.
 
 ## LLM proxy
 
@@ -314,21 +328,40 @@ spectator sees every purchase as it happens. The leak test covers `powerup` and
   per-seat spend and broke state. Roles are shown. Broke seats grey out.
 - Both need the operator token (`?op=<token>`, printed at startup). Seat tokens are
   refused.
+- SSE shapes: `{kind:"init", ...}` once on connect; `{kind:"tick", game, remaining_s,
+  held_s, transition, lobby, pending, thinking, waiting_ready, seats}` every second;
+  `{kind:"phase", phase, day}` on each window change; `{kind:"lobby", seats}` on every
+  readiness change; `{kind:"game_start", game}` and `{kind:"game_over", game, result,
+  summary}` at the ends; and `{kind:"event", ...}` for the engine's public/omniscient
+  log. The staged beats arrive top-level without day/round: `{kind:"ballot_cast", seat}`,
+  `{kind:"ballot_reveal", seat, target, weight, tally}`, `{kind:"night_acted", seat}`,
+  `{kind:"night_beat", step, ...}`, `{kind:"thought", seat, text}`.
 
 ## Spectating (audience only)
 
 The hole cam makes the projector a spectator sport. It doesn't change what bots can see or
 do, and it is never sent to a seat.
 
-**Hole cam.** Every bot LLM call already passes through the proxy, so the server keeps
-the last completion text per seat (and the last user message, truncated to 400 chars)
-and streams it to the spectator as `{kind: "thought", seat, model, text, usd, ms}`. The
-page shows it beside the seat as "thinking" while a call is in flight, then the reply.
-Thoughts never appear in any MCP response, trace sent to a bot, or `game.json` field a
-bot can read; `game.json` keeps them under `thoughts` for the retro. The leak test asserts
-no `thought` text reaches any seat. House bots have no LLM calls, so their hole cam shows
-the brain's one-line reason for its action (`reason` field set by the brain, e.g.
-"most accused: seat 4").
+**Hole cam.** `post`, `vote`, `night_action` and `buy` accept an optional `reason`
+(≤200 chars). It is never shown to a seat; the server emits it to the spectator as
+`{kind: "thought", seat, text}` and appends it to `game.json` under `thoughts` for the
+retro. House bots pass their brain's one-line `reason` (e.g. "most accused: seat 4").
+The leak test asserts no `thought` or `reason` text reaches any seat.
+
+**Lobby and operator start.** With `--manual-start` (default on for `ww final`, off for
+practice) the table opens in a lobby: seats call `get_my_role` (which returns
+`{seat, role: null, partners: [], lobby: true}` until the game starts), the spectator
+gets `{kind: "lobby", seats: [{seat, team, house, ready}]}` on every readiness change,
+and no window opens until `POST /admin/start` with the operator token. `409
+not_ready` while any seat is unready; otherwise the server opens game one, pushes
+`{kind: "game_start", game}` and unfreezes the first window. `ww start` calls the same
+endpoint. After `game_over` the table stays idle (`{status:"idle"}` to bots) until the
+next `/admin/start`; there is no auto-restart under manual-start.
+
+**Game over.** When a game ends the spectator gets `{kind: "game_over", game, result,
+summary}` and `game.json` persists the same summary: `winners`, `wolves`, `deaths` in
+order with `{seat, day, cause}`, `spend_total`, `broke_seats`, `most_accused` and
+`powerups`.
 
 ## Finale (`ww final final.toml`)
 
@@ -357,11 +390,12 @@ cmd = "uv run bot"                     # run inside the checkout
 
 ## CLI
 
-- `ww serve [--format practice|final] [--seats N] [--fake-llm] [--tables N] [--budget-usd X] [--min-window-s S] [--transition-s S] [--discussion-s S] [--max-posts N]`
+- `ww serve [--format practice|final] [--seats N] [--fake-llm] [--tables N] [--budget-usd X] [--min-window-s S] [--transition-s S] [--discussion-s S] [--max-posts N] [--reveal-s S] [--beat-s S] [--manual-start|--no-manual-start]`
 - `ww table --bots random,quiet,accuser,baseline,...` runs house bots against a server;
   it registers its seats with `POST /admin/house` (operator token) before starting.
 - `ww tokens` prints seat tokens for a table.
-- `ww final [--check] final.toml [--min-window-s S] [--transition-s S]` (pacing defaults: min 10s, transition 8s)
+- `ww start --server URL` starts a manual-start table waiting in the lobby.
+- `ww final [--check] final.toml [--min-window-s S] [--transition-s S] [--reveal-s S] [--beat-s S] [--auto-start]` (pacing defaults: min 10s, transition 6s, reveal 1.5s, beat 2.5s; manual start on)
 
 ## Connect Four (`connect4/`)
 

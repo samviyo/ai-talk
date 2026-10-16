@@ -97,6 +97,8 @@ def test_dead_seat_cannot_act() -> None:
     game.abstain(doctor)
     for wolf in wolves:
         game.act(wolf, NightKill(villager))
+    while game.phase == "reveal":
+        game.advance_reveal()
     assert villager not in game.alive()
     with pytest.raises(IllegalAction, check=lambda e: e.code == "dead_seat"):
         game.act(villager, Post(chat="boo"))

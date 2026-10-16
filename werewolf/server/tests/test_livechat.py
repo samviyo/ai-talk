@@ -14,6 +14,8 @@ async def _advance_to_discussion(table) -> None:
         g = table.game
         for seat in list(g.pending()):
             g.abstain(seat)
+        while g.phase == "reveal":
+            g.advance_reveal()
         table.note_window_locked()
         table._released_at -= 0.0
         table._transition_until = 0.0
@@ -100,6 +102,8 @@ async def test_buy_double_vote_then_broke_and_fallback_weight(tmp_path: Path):
                 if seat != buyer:
                     g.act(seat, __import__("werewolf.engine", fromlist=["Vote"]).Vote(target))
             table._fallback_locked(buyer)
+            while g.phase == "reveal":
+                g.advance_reveal()
             table.note_window_locked()
         tally = next(e for e in g.events(None) if e.kind == "vote_tally")
         ballot = next(b for b in tally.data["ballots"] if b["seat"] == buyer)
@@ -179,6 +183,8 @@ async def test_frame_plus_seer_ordering(tmp_path: Path):
         async with table.cond:
             for seat in list(g.pending()):
                 g.abstain(seat)
+            while g.phase == "reveal":
+                g.advance_reveal()
             table.note_window_locked()
         result = next(e for e in g.events(seer) if e.kind == "seer_result")
         assert result.data["role"] == "werewolf"
