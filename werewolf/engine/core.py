@@ -152,6 +152,7 @@ class Game:
         # Server mode queues accepted posts for the floor; bare games publish at once.
         self.floor_queued = False
         self._post_seq = 0
+        self._release_pos: dict[int, int] = {}  # post id -> index in release order
         self._posts_today: Counter[int] = Counter()
         self._post_times: dict[int, float] = {}
         self._extra_posts: dict[int, int] = {}
@@ -235,10 +236,11 @@ class Game:
 
     def board_state(self, seat: int, since: int = 0) -> dict[str, Any]:
         """The public board from one seat's view: posts, nominations, standing."""
-        posts = [self._public_post(p) for p in self._posts if p["id"] >= since]
+        # `since` indexes release order, not post id: queued posts publish out of id order.
+        posts = [self._public_post(p) for p in self._posts[since:]]
         return {
             "posts": posts,
-            "next": self._post_seq,
+            "next": len(self._posts),
             "nominations": self.nominations(),
             "standing": list(self._standing),
             "posts_left": self.posts_left(seat),
@@ -280,6 +282,7 @@ class Game:
         return [
             {"target": t, "by": n["by"], "seconds": sorted(n["seconds"])}
             for t, n in sorted(self._nominations.items())
+            if n.get("public", not self.floor_queued)
         ]
 
     def posts_left(self, seat: int) -> int:
@@ -296,7 +299,7 @@ class Game:
                 continue
             if e.audience is None or seat not in e.audience or e.data.get("batched"):
                 continue
-            if e.data["post_id"] < cursor:
+            if self._release_pos.get(e.data["post_id"], 0) < cursor:
                 continue
             # A reply grant replaces the mention wake for that (from, target) pair.
             if e.data["from"] in (self._reply_grants.get(seat) or {}):
@@ -467,11 +470,15 @@ class Game:
         self._publish_post(seat, post)
 
     def _publish_post(self, seat: int, post: dict[str, Any]) -> None:
+        self._release_pos[post["id"]] = len(self._posts)
         self._posts.append(post)
         public = self._public_post(post)
         public.pop("is_reply", None)  # internal bookkeeping, not board shape
         self._emit("posts_revealed", {"posts": [public]})
         if post["nominate"] is not None:
+            nom = self._nominations.get(post["nominate"])
+            if nom is not None and nom["by"] == seat:
+                nom["public"] = True
             self._emit("nomination", {"seat": seat, "target": post["nominate"]})
         if post["second"] is not None:
             self._emit("seconded", {"seat": seat, "target": post["second"]})
@@ -794,6 +801,11 @@ class Game:
             (a.target for a in self._ballots.values() if isinstance(a, DoctorSave)), None
         )
         seer_checks = dict(self._seer_checks)
+        if kill_votes:
+            # break the tie once so the staged beat and the actual kill always agree
+            counts = Counter(kill_votes)
+            top = max(counts.values())
+            kill_votes = [self._rng.choice(sorted(t for t, c in counts.items() if c == top))]
         # beats and resolutions must interleave, so the seer loop runs at reveal
         self._beat_kill_votes = kill_votes
         self._beat_save = save
@@ -810,10 +822,7 @@ class Game:
         """Audience-only night reveal; skips abstained or dead roles."""
         plan: list[dict[str, Any]] = []
         if kill_votes:
-            counts = Counter(kill_votes)
-            top = max(counts.values())
-            tied = sorted(t for t, c in counts.items() if c == top)
-            plan.append({"step": "wolves", "target": self._rng.choice(tied)})
+            plan.append({"step": "wolves", "target": kill_votes[0]})
         if save is not None:
             plan.append({"step": "doctor", "target": save})
         for seer, target in seer_checks.items():
@@ -954,7 +963,7 @@ class Game:
         self._reacted_today = {}
         self._reply_grants = {}
         self._replied_to = {}
-        self._day_cursors = {s: self._post_seq for s in self.alive()}
+        self._day_cursors = {s: len(self._posts) for s in self.alive()}
 
     def hot_seat_pick(self, exclude: set[int]) -> int | None:
         """Quietest living seat not yet hot today; RNG breaks the tie. Seeded."""

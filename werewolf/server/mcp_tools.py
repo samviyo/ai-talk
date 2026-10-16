@@ -170,8 +170,8 @@ class Dispatcher:
                 if table.idle and not table.manual_start:
                     table.start_game_locked()
                 if table.manual_start and not table.awaiting_start:
-                    # parked lobby: nothing to ready until the next game ends
-                    return _err("not_your_turn", "a game is already running")
+                    # a running game: re-polls after game_start fetch the dealt role
+                    return self._role(table, seat)
                 table.mark_ready_locked(seat)
                 if len(table.ready_seats) == table.config.seats:
                     table.ready_event.set()
@@ -281,14 +281,14 @@ class Dispatcher:
                     serve_key = f"discuss:{g.turn_id}"
                     cursor = g._day_cursors.get(seat, 0)
                     mentions = g.unread_mentions(seat, cursor)
-                    new_posts = g._post_seq > table.seats[seat].since["board"]
+                    new_posts = len(g._posts) > table.seats[seat].since["board"]
                     first = table._served_turn.get(seat) != serve_key
                     if not table.frozen and not table.holding() and (
                         first or mentions or new_posts
                     ):
                         table._served_turn[seat] = serve_key
                         if first:
-                            cursor = g._post_seq  # opener wake: cursor to now
+                            cursor = len(g._posts)  # opener wake: cursor to now
                             g._day_cursors[seat] = cursor
                         out = {
                             "turn_id": table.public_turn_id(),
@@ -356,14 +356,21 @@ class Dispatcher:
         events = g.events(seat)
         if since >= len(events):
             return None
-        hits = [e for e in events[since:] if e.audience is None and e.kind in NEWS_KINDS]
-        hits = hits[:10]
+        hits: list = []
+        cursor = len(events)
+        for i in range(since, len(events)):
+            e = events[i]
+            if e.audience is None and e.kind in NEWS_KINDS:
+                hits.append(e)
+                if len(hits) == 10:
+                    cursor = i + 1  # resume after the last delivered hit, not past unread ones
+                    break
         if not hits:
             return None
         return {
             "status": "news",
             "events": [e.to_dict() for e in hits],
-            "cursor": len(events),
+            "cursor": cursor,
         }
 
     def _role(self, table: Table, seat: int) -> dict[str, Any]:

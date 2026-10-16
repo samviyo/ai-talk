@@ -215,7 +215,14 @@ def cmd_start(args: argparse.Namespace) -> int:
 
     import httpx
 
-    token_file = args.token_file or str(Path(args.runs_dir) / "tokens.json")
+    candidates = [args.token_file] if args.token_file else [
+        str(Path(args.runs_dir) / "final" / "tokens.json"),
+        str(Path(args.runs_dir) / "tokens.json"),
+    ]
+    token_file = next((c for c in candidates if Path(c).exists()), None)
+    if token_file is None:
+        print(f"no token file; looked in {', '.join(candidates)}")
+        return 1
     operator = json.loads(Path(token_file).read_text()).get("operator")
     resp = httpx.post(
         f"{args.server}/admin/start", params={"op": operator}, timeout=10

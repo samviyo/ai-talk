@@ -51,9 +51,7 @@ async def _refresh_board(session: ClientSession, view: dict[str, Any], since: in
     board = await _call(session, "read_board", {"since": since})
     if "error" in board:
         return since
-    view["board"] = (view["board"] or []) + [
-        p for p in board.get("posts") or [] if p["id"] >= since
-    ]
+    view["board"] = (view["board"] or []) + list(board.get("posts") or [])
     view["nominations"] = board.get("nominations") or []
     view["standing"] = board.get("standing") or []
     view["posts_left"] = board.get("posts_left", 0)
@@ -116,9 +114,11 @@ async def _run_session(session: ClientSession, brain: Any) -> dict[str, Any]:
     }
     cursor = 0
     final: dict[str, Any] = {"status": "disconnected"}
+    handoff: dict[str, Any] | None = None  # a turn the discussion loop already consumed
 
     while True:
-        turn = await _call(session, "wait_for_turn", {"timeout_s": WAIT_TIMEOUT_S})
+        turn = handoff or await _call(session, "wait_for_turn", {"timeout_s": WAIT_TIMEOUT_S})
+        handoff = None
         status = turn.get("status")
         if status == "over":
             final = turn
@@ -126,6 +126,12 @@ async def _run_session(session: ClientSession, brain: Any) -> dict[str, Any]:
         if status in ("waiting", "idle") or not turn.get("turn_id"):
             continue
 
+        if view["role"] is None:
+            # dealt in the lobby: the role card arrives once the operator starts
+            role_info = await _call(session, "get_my_role", {})
+            if isinstance(role_info, dict) and role_info.get("role"):
+                view["role"] = role_info["role"]
+                view["partners"] = role_info.get("partners") or []
         view["turn"] = turn
         _update_dead(view, turn)
         phase = turn.get("phase")
@@ -135,7 +141,7 @@ async def _run_session(session: ClientSession, brain: Any) -> dict[str, Any]:
             view["wolf_chat"] = chat.get("messages") or []
 
         if phase == "day_discussion":
-            cursor = await _run_discussion(session, view, brain, turn, cursor)
+            cursor, handoff = await _run_discussion(session, view, brain, turn, cursor)
             continue
 
         # night, defence, vote: one decision per window
@@ -168,7 +174,7 @@ async def _run_discussion(
     brain: Any,
     turn: dict[str, Any],
     cursor: int,
-) -> int:
+) -> tuple[int, dict[str, Any] | None]:
     """Live-chat loop: staggered opener, then react to mentions and the board."""
     seat = view["seat"]
     opener_at = brain.opener_delay()
@@ -185,7 +191,7 @@ async def _run_discussion(
         left = deadline_s - elapsed
         view["time_left_s"] = left
         if left <= 0.5:
-            return cursor
+            return cursor, None
         mentions = turn.get("mentions") or []
         view["mentions"] = mentions
         posts_left = view.get("posts_left", 0)
@@ -228,7 +234,7 @@ async def _run_discussion(
             {"timeout_s": min(2.0, left), "since": news_cursor},
         )
         if nxt.get("status") == "over":
-            return cursor
+            return cursor, nxt
         if nxt.get("cursor") is not None:
             news_cursor = int(nxt["cursor"])
         if nxt.get("status") == "news":
@@ -242,7 +248,7 @@ async def _run_discussion(
         # keep the discussion turn_id; only swap when a real turn payload arrives
         if nxt.get("turn_id"):
             if nxt.get("phase") != "day_discussion":
-                return cursor
+                return cursor, nxt  # the outer loop must act on this already-served turn
             turn = nxt
             view["turn"] = turn
             _update_dead(view, turn)

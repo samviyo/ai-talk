@@ -45,8 +45,8 @@ async def _maybe_buy_vote(session: ClientSession, turn: dict) -> None:
 
 
 async def _discuss(session: ClientSession, llm, config: BotConfig,
-                   my_role: str, turn: dict) -> None:
-    """Live-chat loop: opener, free replies, hot seat, reactions on news."""
+                   my_role: str, turn: dict) -> dict | None:
+    """Live-chat loop; returns a non-discussion turn it already consumed, if any."""
     turn_id = turn["turn_id"]
     cursor = int(turn.get("board_cursor") or 0)
     deadline_s = float(turn.get("deadline_s") or 0)
@@ -63,8 +63,7 @@ async def _discuss(session: ClientSession, llm, config: BotConfig,
             await asyncio.sleep(1.05)
             continue
         posts = board.get("posts", [])
-        if posts:
-            cursor = max(cursor, max(p["id"] for p in posts) + 1)
+        cursor = int(board.get("next", cursor))
         posts_left = int(board.get("posts_left", 0))
         mentions = turn.get("mentions") or []
         want = None
@@ -122,15 +121,17 @@ async def _discuss(session: ClientSession, llm, config: BotConfig,
         if news_cursor is not None:
             args["since"] = news_cursor
         turn = await _call(session, "wait_for_turn", args)
-        if not isinstance(turn, dict) or turn.get("status") == "over":
-            return
+        if not isinstance(turn, dict):
+            return None
+        if turn.get("status") == "over":
+            return turn
         if isinstance(turn.get("cursor"), int):
             news_cursor = turn["cursor"]
         if turn.get("status") == "news":
             await _on_news(session, llm, config, turn)
             continue
         if turn.get("phase") not in (None, "day_discussion"):
-            return
+            return turn
         await asyncio.sleep(1.05)
 
 
@@ -210,12 +211,14 @@ async def play(server: str, token: str, config: BotConfig) -> None:
                 seat = role_info["seat"]
                 print(f"seat {seat} role {my_role}", file=sys.stderr)
 
+                handoff: dict | None = None  # a turn _discuss already consumed
                 while True:
                     if llm.broke:
                         # Out of budget: stop spending; the server fallback acts for us.
                         print("broke: stopping LLM calls", file=sys.stderr)
                         return
-                    turn = await _call(session, "wait_for_turn", {"timeout_s": 25})
+                    turn = handoff or await _call(session, "wait_for_turn", {"timeout_s": 25})
+                    handoff = None
                     if not isinstance(turn, dict):
                         continue
                     if turn.get("status") == "over":
@@ -224,12 +227,19 @@ async def play(server: str, token: str, config: BotConfig) -> None:
                     if turn.get("status") in ("waiting", "idle"):
                         continue
 
+                    if my_role is None:
+                        # joined in the lobby: the role is dealt once the game starts
+                        role_info = await _call(session, "get_my_role", {})
+                        if isinstance(role_info, dict) and role_info.get("role"):
+                            my_role = role_info["role"]
+                            print(f"seat {seat} role {my_role}", file=sys.stderr)
+
                     obligation = turn.get("you_owe")
                     turn_id = turn["turn_id"]
                     legal = turn.get("legal_targets", [])
 
                     if obligation == "discuss":
-                        await _discuss(session, llm, config, my_role, turn)
+                        handoff = await _discuss(session, llm, config, my_role, turn)
                         continue
 
                     board = await _call(session, "read_board", {"since": 0})

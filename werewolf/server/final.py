@@ -175,6 +175,9 @@ async def run_final(
     serve_task = asyncio.create_task(server.serve())
     await asyncio.sleep(1.0)
     url = f"http://127.0.0.1:{port}"
+    from .cli import _write_tokens_file  # noqa: PLC0415
+
+    _write_tokens_file(state, Path("runs/final"))  # `ww start` reads the operator token here
     print(f"[final] spectator: {url}/?op={state.operator_token}", flush=True)
 
     def bot_cmd(seat: int) -> tuple[list[str] | str, Path | None, bool]:

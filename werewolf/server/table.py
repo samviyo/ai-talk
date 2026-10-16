@@ -163,7 +163,6 @@ class Table:
         self._cut_offs: list[dict[str, Any]] = []  # public, emit at day end
         self._hot_passes: list[dict[str, Any]] = []
         self._reveal_until = 0.0  # staged ballot/night-beat clock
-        self._deaths: list[dict[str, Any]] = []  # per game, in order
         self._game_started = False
         if manual_start:
             # The constructor's game is a placeholder; the lobby holds until start.
@@ -197,7 +196,6 @@ class Table:
         self._hot_day = 0
         self._cut_offs = []
         self._hot_passes = []
-        self._deaths = []
         self._game_started = False
         self.game = Game(replace(self.config, seed=seed))
         self.game.floor_queued = True  # server floor owns release timing
@@ -327,8 +325,14 @@ class Table:
         self.note_window_locked()
         now = time.monotonic()
         if g.phase == "day_discussion" and g.result is None and not self.frozen:
-            self._pump_floor_locked()
-            self._check_hot_seat_locked(now)
+            if self._drain_deadline is not None and now >= self._drain_deadline:
+                pass  # drain expired: the deadline branch cuts off, nothing more releases
+            else:
+                self._pump_floor_locked()
+            if self.holding():
+                self._dead_air_since = now  # nobody can answer during a hold
+            else:
+                self._check_hot_seat_locked(now)
         if (
             not self.frozen
             and self._reveal_until
@@ -341,8 +345,7 @@ class Table:
             self.note_window_locked()
             if not self._reveal_until and g.phase == "reveal" and g.result is None:
                 # same phase, next beat: start a fresh reveal hold
-                if self._reveal_hold_s() > 0:
-                    self._reveal_until = time.monotonic() + self._reveal_hold_s()
+                self._reveal_until = time.monotonic() + max(self._reveal_hold_s(), 0.001)
         elif (
             g.result is None
             and not self.frozen
@@ -405,6 +408,7 @@ class Table:
 
                 traceback.print_exc()
             self._run_written = True
+            self._notify_sse_locked()  # the terminal death must reach viewers before game_over
             summary = self.build_summary()
             self._push_sse_locked(
                 {
@@ -425,8 +429,11 @@ class Table:
         winners = sorted(s for s in g.alive() if (s in g._wolves) == (g.result == "wolves"))
         accusations: Counter[int] = Counter()
         powerups = 0
+        deaths: list[dict[str, Any]] = []
         for e in g.events(None):
-            if e.kind == "posts_revealed":
+            if e.kind == "death":
+                deaths.append({"seat": e.data["seat"], "day": e.day, "cause": e.data["cause"]})
+            elif e.kind == "posts_revealed":
                 for p in e.data["posts"]:
                     if p.get("accuse") is not None:
                         accusations[p["accuse"]] += 1
@@ -436,7 +443,7 @@ class Table:
         return {
             "winners": winners,
             "wolves": sorted(g._wolves),
-            "deaths": list(self._deaths),
+            "deaths": deaths,
             "spend_total": round(sum(self.seats[s].spent_usd for s in range(g.config.seats)), 6),
             "broke_seats": broke,
             "most_accused": accusations.most_common(1)[0][0] if accusations else None,
@@ -461,15 +468,17 @@ class Table:
                 self._floor_hold = None  # defence post releases on acceptance
             if self.game.phase not in ("day_discussion", "defence"):
                 self._hot_active = None
+            if self.game.phase == "day_discussion":
+                self._dead_air_since = self.window_opened
             self._prev_phase = self.game.phase
             if self.game.phase == "reveal":
                 # the staged reveal holds the next window
-                hold = self._reveal_hold_s()
-                if hold > 0:
-                    self._reveal_until = time.monotonic() + hold
-                    self._transition_until = max(
-                        self._transition_until, time.monotonic() + hold
-                    )
+                # a zero hold still needs a nonzero mark or the reveal never steps
+                hold = max(self._reveal_hold_s(), 0.001)
+                self._reveal_until = time.monotonic() + hold
+                self._transition_until = max(
+                    self._transition_until, time.monotonic() + hold
+                )
 
     # --- the discussion floor -------------------------------------------------
 
@@ -485,6 +494,8 @@ class Table:
         now = time.monotonic()
         if self.is_broke(seat):
             return {"error": "broke", "message": "seat budget exhausted"}
+        if self._drain_deadline is not None or now >= self.deadline():
+            return {"error": "stale_turn", "message": "discussion deadline passed"}
         if self.phase_flags(seat):
             return {"error": "still_queued"}
         if self._speaking_seat == seat and self._floor_hold is not None:
@@ -710,7 +721,8 @@ class Table:
             if e.post["nominate"] is not None:
                 g._nominated_today.discard(e.seat)
                 nom = g._nominations.get(e.post["nominate"])
-                if nom is not None and nom["by"] == e.seat and not nom["seconds"]:
+                if nom is not None and nom["by"] == e.seat and not nom.get("public"):
+                    # never announced: it and any seconds behind it vanish with the cut
                     del g._nominations[e.post["nominate"]]
             if e.post["second"] is not None:
                 g._seconded_today.discard(e.seat)
@@ -883,10 +895,6 @@ class Table:
     def _notify_sse_locked(self) -> None:
         events = self.game.events(None)
         for e in events[self.sse_seq :]:
-            if e.kind == "death":
-                self._deaths.append(
-                    {"seat": e.data["seat"], "day": e.day, "cause": e.data["cause"]}
-                )
             payload = self._sse_event_payload(e)
             if payload is None:
                 continue
