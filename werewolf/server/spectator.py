@@ -441,7 +441,7 @@ function onEvent(e){
     case 'hot_seat_pass':if(hot===e.seat)hot=null;render(e.seat);flash(e.seat);
       spot(e.seat,e.fine_usd?'Too slow · −$'+Number(e.fine_usd).toFixed(3):'…says nothing',null,true);
       if(e.fine_usd&&pos[e.seat]){const f=document.createElement('div');f.className='fine';f.textContent='−$'+Number(e.fine_usd).toFixed(3);f.style.left=pos[e.seat][0]+'%';f.style.top=(pos[e.seat][1]-6)+'%';$('ringwrap').appendChild(f);setTimeout(()=>f.remove(),2500)}
-      sys('🤐 Seat '+e.seat+' missed the hot seat'+(e.fine_usd?' · fined $'+Number(e.fine_usd).toFixed(3):''),'death');timeline.push(['Day '+curDay,'Seat '+e.seat+' froze on the hot seat.']);break;
+      sys('🤐 Seat '+e.seat+' missed the hot seat'+(e.fine_usd?' · fined $'+Number(e.fine_usd).toFixed(3):''),'death');break;
     case 'reply_owed':owed[e.seat]=e.from;render(e.seat);sys('↩ Seat '+e.seat+' may answer seat '+e.from);break;
     case 'cut_off':sys('✂️ Out of time · cut off: seats '+e.seats.join(', '));break;
     case 'nomination':sys('📌 Seat '+e.seat+' nominates <b>seat '+e.target+'</b>');break;
