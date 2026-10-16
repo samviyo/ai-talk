@@ -51,18 +51,24 @@ class LLMClient:
         self._config = config
         self.broke = False
 
-    def complete(self, model: str, prompt: str, timeout_s: float | None = None) -> str:
+    def complete(self, model: str, prompt: str, timeout_s: float | None = None,
+                 max_tokens: int | None = None, fast: bool = False) -> str:
         if self.broke:
             return ""
         try:
+            kwargs: dict = {}
+            if fast:
+                # The hot seat is a 5s speed test: no reasoning, few tokens.
+                kwargs["extra_body"] = {"reasoning_effort": "none"}
             resp = self._client.chat.completions.create(
                 model=model,
-                max_tokens=self._config.max_tokens,
+                max_tokens=max_tokens or self._config.max_tokens,
                 timeout=timeout_s,
                 messages=[
                     {"role": "system", "content": _SYSTEM},
                     {"role": "user", "content": prompt},
                 ],
+                **kwargs,
             )
         except Exception as exc:
             # 402 from the proxy means the seat's budget is spent.

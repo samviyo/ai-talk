@@ -20,6 +20,9 @@ WHISPER_MAX = 280
 MIN_POST_GAP_S = 5.0
 DEFENCE_S = 15.0
 MAX_STANDING = 3
+REACTION_KINDS = ("agree", "doubt", "suspect")
+MAX_REACTIONS_PER_DAY = 8
+REPLY_GRANT_KINDS = ("accuse", "nominate", "second")
 
 POWERUP_PRICES: dict[str, float] = {
     "extra_post": 0.05,
@@ -142,6 +145,9 @@ class Game:
         self._last_save: int | None = None
         # discussion state
         self._posts: list[dict[str, Any]] = []
+        self._pending_release: list[dict[str, Any]] = []  # accepted, not yet public
+        # Server mode queues accepted posts for the floor; bare games publish at once.
+        self.floor_queued = False
         self._post_seq = 0
         self._posts_today: Counter[int] = Counter()
         self._post_times: dict[int, float] = {}
@@ -153,6 +159,11 @@ class Game:
         self._day_cursors: dict[int, int] = {}  # seat -> board cursor at day start
         self._standing: list[int] = []
         self._defence_queue: list[int] = []
+        self._reactions: dict[int, dict[str, list[int]]] = {}  # post_id -> kind -> seats
+        self._reactions_today: Counter[int] = Counter()
+        self._reacted_today: dict[int, set[int]] = {}  # post_id -> seats
+        self._reply_grants: dict[int, dict[int, dict[str, Any]]] = {}  # target -> from -> grant
+        self._replied_to: dict[int, set[int]] = {}  # target -> accusers already answered
         # night / power-up state
         self._seer_checks: dict[int, int] = {}
         self._frames: dict[int, int] = {}  # framed target -> buyer
@@ -215,14 +226,46 @@ class Game:
 
     def board_state(self, seat: int, since: int = 0) -> dict[str, Any]:
         """The public board from one seat's view: posts, nominations, standing."""
-        posts = [p for p in self._posts if p["id"] >= since]
+        posts = [self._public_post(p) for p in self._posts if p["id"] >= since]
         return {
             "posts": posts,
             "next": self._post_seq,
             "nominations": self.nominations(),
             "standing": list(self._standing),
             "posts_left": self.posts_left(seat),
+            "reply_owed": self.reply_owed(seat),
         }
+
+    def _public_post(self, post: dict[str, Any]) -> dict[str, Any]:
+        return {
+            **post,
+            "reactions": {
+                k: len(v) for k, v in self._reactions.get(post["id"], {}).items()
+            },
+        }
+
+    def reply_owed(self, seat: int) -> dict[str, Any] | None:
+        """An unused right-of-reply grant for this seat, oldest first."""
+        grants = self._reply_grants.get(seat) or {}
+        for g in grants.values():
+            return {"reply_to": g["post_id"], "from": g["from"], "chat": g["chat"]}
+        return None
+
+    def consume_reply_grant(self, seat: int) -> dict[str, Any] | None:
+        """Pop the grant a reply post is spending; None when there is none."""
+        grants = self._reply_grants.get(seat) or {}
+        for frm in sorted(grants):
+            return grants.pop(frm)
+        return None
+
+    def public_cursor(self) -> int:
+        return len(self._events)
+
+    def public_events_after(self, seat: int, cursor: int) -> list[Event]:
+        events = self.events(seat)
+        if cursor >= len(events):
+            return []
+        return [e for e in events[cursor:] if e.audience is None]
 
     def nominations(self) -> list[dict[str, Any]]:
         return [
@@ -245,6 +288,10 @@ class Game:
             if e.audience is None or seat not in e.audience or e.data.get("batched"):
                 continue
             if e.data["post_id"] < cursor:
+                continue
+            # A reply grant replaces the mention wake for that (from, target) pair.
+            if e.data["from"] in (self._reply_grants.get(seat) or {}):
+                e.data["batched"] = True
                 continue
             out.append(e.data)
             e.data["batched"] = True
@@ -324,11 +371,18 @@ class Game:
             if action.nominate is not None or action.second is not None:
                 raise IllegalAction("not_available", "no nominations in a defence")
             return
-        if self.posts_left(seat) <= 0:
-            raise IllegalAction("no_posts_left", f"seat {seat} is out of posts today")
-        last = self._post_times.get(seat)
-        if last is not None and now - last < MIN_POST_GAP_S:
-            raise IllegalAction("too_fast", f"5s between posts, {now - last:.1f}s elapsed")
+        grants = self._reply_grants.get(seat) or {}
+        reply_grant = None
+        if action.reply_to is not None:
+            reply_grant = next(
+                (g for g in grants.values() if g["post_id"] == action.reply_to), None
+            )
+        # A granted reply is free of the daily limit, the 5s gap and nomination rules.
+        if reply_grant is None and action.nominate is None and action.second is None:
+            if self.posts_left(seat) <= 0:
+                raise IllegalAction(
+                    "no_posts_left", f"seat {seat} is out of posts today"
+                )
         if action.nominate is not None:
             if action.nominate not in self.alive():
                 raise IllegalAction("invalid_target", f"cannot nominate {action.nominate}")
@@ -342,7 +396,8 @@ class Game:
             if self._nominations[action.second]["by"] == seat:
                 raise IllegalAction("invalid_target", "cannot second your own nomination")
 
-    def _record_post(self, seat: int, action: Post, now: float) -> None:
+    def _record_post(self, seat: int, action: Post, now: float) -> dict[str, Any]:
+        """Record an accepted post: counters and registries now, publicity on release."""
         post = {
             "id": self._post_seq,
             "seat": seat,
@@ -356,21 +411,109 @@ class Game:
             "second": action.second,
         }
         self._post_seq += 1
-        self._posts.append(post)
-        self._emit("posts_revealed", {"posts": [post]})
-        if self._pending.get(seat) != "defence":
+        is_reply = self.phase == "day_discussion" and self._spend_reply_grant(seat, action)
+        post["is_reply"] = is_reply
+        counts = (
+            self._pending.get(seat) != "defence"
+            and not (self.phase == "day_discussion" and is_reply)
+        )
+        if counts:
             self._posts_today[seat] += 1
+            # The 5s gap runs from release; sim.py's release shim re-stamps it.
             self._post_times[seat] = now
         if action.nominate is not None:
             self._nominated_today.add(seat)
-            if action.nominate not in self._nominations:
-                self._nominations[action.nominate] = {"by": seat, "seconds": set()}
-                self._emit("nomination", {"seat": seat, "target": action.nominate})
+            self._nominations.setdefault(action.nominate, {"by": seat, "seconds": set()})
         if action.second is not None:
             self._seconded_today.add(seat)
             self._nominations[action.second]["seconds"].add(seat)
-            self._emit("seconded", {"seat": seat, "target": action.second})
+        if self._pending.get(seat) != "defence" and self.floor_queued:
+            # Server mode: discussion posts go public only when the floor releases them.
+            self._pending_release.append(post)
+        else:
+            self._publish_post(seat, post)
+        return post
+
+    def _spend_reply_grant(self, seat: int, action: Post) -> bool:
+        grants = self._reply_grants.get(seat) or {}
+        for frm in sorted(grants):
+            if grants[frm]["post_id"] == action.reply_to:
+                del grants[frm]
+                self._replied_to.setdefault(seat, set()).add(frm)
+                return True
+        return False
+
+    def clear_reply_grants(self, seat: int) -> None:
+        self._reply_grants.pop(seat, None)
+
+    def take_pending_release(self, seat: int) -> dict[str, Any] | None:
+        """The server floor claims the seat's recorded-but-unpublished post."""
+        for i, p in enumerate(self._pending_release):
+            if p["seat"] == seat:
+                return self._pending_release.pop(i)
+        return None
+
+    def release_post(self, seat: int, post: dict[str, Any]) -> None:
+        """The floor releases one accepted post: board, nomination beats, mentions."""
+        self._publish_post(seat, post)
+
+    def _publish_post(self, seat: int, post: dict[str, Any]) -> None:
+        self._posts.append(post)
+        public = self._public_post(post)
+        public.pop("is_reply", None)  # internal bookkeeping, not board shape
+        self._emit("posts_revealed", {"posts": [public]})
+        if post["nominate"] is not None:
+            self._emit("nomination", {"seat": seat, "target": post["nominate"]})
+        if post["second"] is not None:
+            self._emit("seconded", {"seat": seat, "target": post["second"]})
+        self._grant_replies(seat, post)
         self._emit_mentions(seat, post)
+
+    def _grant_replies(self, seat: int, post: dict[str, Any]) -> None:
+        for field_name in REPLY_GRANT_KINDS:
+            target = post.get(field_name)
+            if target is None or target == seat:
+                continue
+            if not (0 <= target < self.config.seats) or not self._alive[target]:
+                continue
+            grants = self._reply_grants.setdefault(target, {})
+            # One grant per distinct accuser per day, answered or not.
+            if seat in grants or seat in self._replied_to.get(target, set()):
+                continue
+            grants[seat] = {"post_id": post["id"], "from": seat, "chat": post["chat"]}
+            self._emit(
+                "reply_owed",
+                {"seat": target, "from": seat, "post_id": post["id"]},
+                audience=frozenset({target}),
+            )
+
+    def react(self, seat: int, post_id: int, kind: str) -> None:
+        """Immediate public reaction; never queued behind the floor."""
+        if self.result is not None:
+            raise IllegalAction("not_your_turn", "game over")
+        self._check_seat(seat)
+        if not self._alive[seat]:
+            raise IllegalAction("dead_seat", f"seat {seat} is dead")
+        if self.phase not in ("day_discussion", "defence"):
+            raise IllegalAction("not_available", "reactions only during the day talk")
+        if kind not in REACTION_KINDS:
+            raise IllegalAction("bad_schema", f"unknown reaction {kind!r}")
+        post = next((p for p in self._posts if p["id"] == post_id), None)
+        if post is None or post["day"] != self.day:
+            raise IllegalAction("invalid_target", f"no public post {post_id}")
+        if post["seat"] == seat:
+            raise IllegalAction("invalid_target", "cannot react to your own post")
+        if seat in self._reacted_today.setdefault(post_id, set()):
+            raise IllegalAction("already_acted", "already reacted to this post")
+        if self._reactions_today.get(seat, 0) >= MAX_REACTIONS_PER_DAY:
+            raise IllegalAction("rate_limited", f"max {MAX_REACTIONS_PER_DAY} reactions a day")
+        self._reacted_today[post_id].add(seat)
+        self._reactions_today[seat] += 1
+        self._reactions.setdefault(post_id, {}).setdefault(kind, []).append(seat)
+        self._emit(
+            "reaction",
+            {"seat": seat, "post_id": post_id, "target_seat": post["seat"], "reaction": kind},
+        )
 
     def _emit_night_action(self, seat: int, action: str, target: int) -> None:
         """Audience-only beat so the projector shows the night unfolding."""
@@ -572,6 +715,8 @@ class Game:
         """Timed close of the discussion window: pick nominees, open defences."""
         if self.phase != "day_discussion":
             raise IllegalAction("not_your_turn", "no discussion window open")
+        # Unused right-of-reply grants expire quietly when the floor closes.
+        self._reply_grants = {}
         self._flush_whispers()
         ranked = sorted(
             self._nominations.items(),
@@ -604,7 +749,11 @@ class Game:
         self._whispers = []
 
     def _silent_seats(self) -> list[int]:
-        return [s for s in self.alive() if self._posts_today.get(s, 0) == 0]
+        return [
+            s
+            for s in self.alive()
+            if self._posts_today.get(s, 0) == 0 and self._reactions_today.get(s, 0) == 0
+        ]
 
     def _next_defence(self) -> None:
         """Open the next standing nominee's defence window, or the vote."""
@@ -688,7 +837,25 @@ class Game:
         self._wakened = {}
         self._standing = []
         self._defence_queue = []
+        self._reactions = {}
+        self._reactions_today = Counter()
+        self._reacted_today = {}
+        self._reply_grants = {}
+        self._replied_to = {}
         self._day_cursors = {s: self._post_seq for s in self.alive()}
+
+    def hot_seat_pick(self, exclude: set[int]) -> int | None:
+        """Quietest living seat not yet hot today; RNG breaks the tie. Seeded."""
+        candidates = [
+            s
+            for s in self.alive()
+            if s not in exclude and self.posts_left(s) > 0
+        ]
+        if not candidates:
+            return None
+        fewest = min(self._posts_today.get(s, 0) for s in candidates)
+        tied = sorted(s for s in candidates if self._posts_today.get(s, 0) == fewest)
+        return self._rng.choice(tied)
 
     def _open_window(self, phase: Phase | None = None, defence_seat: int | None = None) -> None:
         if phase is not None:

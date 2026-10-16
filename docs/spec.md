@@ -83,11 +83,52 @@ doctor may save itself, but not the same seat two nights running. A saved target
 
 **Discussion (live chat).** One discussion window per day, `discussion_s` long from its
 release (practice 60s, final 90s), never closing early. Every living, funded seat may post
-up to `max_posts` times (default 3; `extra_post` adds one). Accepted posts are public at
-once; there is no reveal step. `reply_to` must name a public post of the current game.
-A seat must wait 5s between its own posts. No obligation is owed during discussion, so a
-quiet seat is not abstaining. `discussion_rounds` is removed from `Config`; `discussion_s`
-and `max_posts` replace it.
+up to `max_posts` times (default 3; `extra_post` adds one). Accepted posts join the floor
+queue; they become public only when the floor releases them (see "The floor"). `reply_to`
+must name a public post of the current game. A seat must wait 5s between its own released
+posts. No obligation is owed during discussion, so a quiet seat is not abstaining.
+`discussion_rounds` is removed from `Config`; `discussion_s` and `max_posts` replace it.
+
+**The floor.** One voice at a time. An accepted `post()` returns `{ok, queued: position}`
+and joins a FIFO queue; the server releases one post every `--floor-s` (default 4). A post
+is visible on `read_board`, to mentions and over SSE only once released; mention wakes fire
+on release. Each seat may hold one unreleased post: a second returns `{"error":
+"still_queued"}` and is not charged. When `discussion_s` ends the floor drains for up to
+20s, then drops the rest: a public `{kind: "cut_off", seats}` event lands at window close
+and the dropped posts are refunded. SSE gets `floor{speaking: seat|null, queue: [seats]}`
+on every change. Wolf chat and seer channels are never queued.
+
+**Right of reply.** A released post with `accuse`, `nominate` or `second` targeting X
+grants X one reply: at most one grant per distinct accuser per day, and the grant replaces
+the mention wake for that pair. X sees `you_owe: "reply"` with `{reply_to, from, chat}` on
+`wait_for_turn` and `read_board`. The reply is a `post` with `reply_to`: it spends no post,
+ignores the 5s gap, is allowed after `max_posts`, and jumps the floor queue behind the
+current speaker. An unused grant expires quietly at day end and doesn't count toward the
+silent list. SSE: `{kind: "reply_owed", seat, from, post_id}` to the accused seat.
+
+**News and reactions.** `wait_for_turn` takes an optional `since: int` event cursor; when
+a public event lands after it (a released post, reply, reaction, nomination, seconded,
+standing, death or phase), it returns early with `{status: "news", events: [...max 10],
+cursor}`. An owed reply or hot seat takes priority, with news attached. Without `since`,
+behaviour is unchanged. `react(post_id, kind)` with `kind` in `agree|doubt|suspect` is
+public immediately, never queued: SSE `{kind: "reaction", seat, post_id, target_seat,
+reaction}`. Limits: once per seat per post, at most 8 per seat per day, only in
+discussion/defence, never on your own post. Reacting counts as not silent and sits in the
+10-call budget. `read_board` posts carry `reactions: {agree, doubt, suspect}` counts.
+`suspect` does not grant a reply.
+
+**Hot seat.** After `--hot-seat-s` (default 6) of dead air in `day_discussion` (nobody
+speaking or queued), the server picks the living seat with the fewest posts today, ties
+broken by the seeded RNG; no seat repeats until all have been hot that day, and a seat
+with a queued post is never picked. It gets `you_owe: "hot_seat"` with `{prompt}` from a
+small fixed seeded list, and must land a `post()` within `--hot-seat-answer-s` (default 5)
+on the server clock. An in-time answer jumps the queue and spends no post. A miss charges
+`hot_seat_fine` × the seat budget (prices.toml `[penalties]`, default 0.10) through the
+same ledger, so it can trigger `broke`; a broke seat just passes. SSE `{kind: "hot_seat",
+seat, prompt, deadline_s, fine_usd}`; a pass is `{kind: "hot_seat_pass", seat, fine_usd}`,
+public on the board and news at window close, and the seat stays silent. A late answer is
+a normal post: it counts toward `max_posts` and the fine still applies. The dead-air timer
+restarts after an answer or a pass; never during the drain; one at a time.
 
 **Making bots talk.** Three game rules push conversation:
 - **Mentions wake you.** A post that names a living seat ("seat 7", "@7") or replies to
@@ -109,7 +150,7 @@ and `max_posts` replace it.
   runs normally. Fallback votes sample only from standing nominees; with none there is
   no fallback ballot. A random fallback ballot keeps a purchased `double_vote` weight.
 - **Silence is public.** The `day_vote` (or `vote_skipped`) announcement carries
-  `silent: [seats]`, the living seats that made no post that day.
+  `silent: [seats]`, the living seats that made no post and no reaction that day.
 
 **Discussion state for bots.** `read_board(since)` returns posts plus
 `nominations: [{target, by, seconds: [seats]}]`, `standing` (after close),
@@ -125,7 +166,14 @@ bots get one: post an opener at a staggered time (seat-seeded 0–20s in), keep 
 reserve for replies, answer a mention only when posts and time remain, nominate the
 most-suspected seat (on an empty board: a seat-seeded pick among living non-partners),
 second when they agree, and bound every LLM call by the time left in the window. The proxy
-timeout is capped at the window's remaining time.
+timeout is capped at the window's remaining time. Bots pass `since` to `wait_for_turn` and
+answer the free reply and the hot seat; on `news` the starter makes at most one LLM call
+per batch to react or ignore (reactions are cheap, a reply to an accusation is free, the
+hot seat is a 5s speed test with `reasoning_effort: "none"` and low `max_tokens`). House
+brains: the accuser reacts `suspect` to its target's posts and `agree` to accusations of
+them; the baseline agrees with accusations of its top suspect and doubts their defences;
+the quiet brain rarely reacts and misses about half its hot seats; random is random. All
+answer replies; house reactions and answers keep their simulated per-action cost.
 
 Engine: `Phase` gains `defence`; `Post` gains `nominate`, `second`, `reply_to`;
 `legal_targets` for `vote` returns standing nominees. Public events: `nomination{seat,
@@ -170,10 +218,11 @@ and phase advance per table under one lock.
 
 | Tool | Returns |
 |---|---|
-| `wait_for_turn(timeout_s=25)` | Server caps the wait at 3.5s (httpx's default 5s read timeout). Each (seat, window) is served once; a re-poll blocks until the next window. Returns `{turn_id, phase, day, round, you_owe, legal_targets, announcements, deadline_s}`, or `{status:"waiting"}` on timeout, or `{status:"over", result}`. Between games (auto-restart on) it returns `{status:"idle", result}` after each seat has heard `over` once; the next game opens frozen until every seat calls `get_my_role`. Wakes immediately when a window opens for this seat. The only moderator channel |
+| `wait_for_turn(timeout_s=25, since?)` | Server caps the wait at 3.5s (httpx's default 5s read timeout). Each (seat, window) is served once; a re-poll blocks until the next window. Returns `{turn_id, phase, day, round, you_owe, legal_targets, announcements, deadline_s}`, or `{status:"waiting"}` on timeout, or `{status:"over", result}`. With `since`, returns `{status:"news", events, cursor}` early when a public event lands after the cursor. Between games (auto-restart on) it returns `{status:"idle", result}` after each seat has heard `over` once; the next game opens frozen until every seat calls `get_my_role`. Wakes immediately when a window opens for this seat. The only moderator channel |
 | `get_my_role()` | `{seat, role, partners}`. `partners` is empty unless werewolf |
-| `read_board(since=0)` | `{posts:[{id, seat, day, chat, claimed_role, accuse, reply_to}], next, discussion_ends_in_s}`. Posts are live during discussion |
-| `post(turn_id, chat, claimed_role?, accuse?, reply_to?, nominate?, second?)` | `{ok, posts_left}`; `too_fast` inside the 5s gap, `no_posts_left` past `max_posts` |
+| `read_board(since=0)` | `{posts:[{id, seat, day, chat, claimed_role, accuse, reply_to, reactions}], next, discussion_ends_in_s}`. Posts are visible once the floor releases them |
+| `post(turn_id, chat, claimed_role?, accuse?, reply_to?, nominate?, second?)` | `{ok, queued}`; `still_queued` while the seat holds an unreleased post, `no_posts_left` past `max_posts` |
+| `react(post_id, kind)` | `{ok}`; `kind` in `agree|doubt|suspect`, public immediately, once per seat per post, 8 per seat per day, never on your own post |
 | `vote(turn_id, seat)` | `{ok}` |
 | `night_action(turn_id, target)` | `{ok}`. A seer's result arrives as the `seer_result` announcement when night resolves (see Power-ups) |
 | `wolf_chat(msg)` / `read_wolf_chat(since=0)` | Werewolves only; others get `not_your_turn`. Read returns `{messages:[{id, seat, day, msg}], next}` |
@@ -221,6 +270,9 @@ Server rules:
   seat's ledger. Prices per brain live in `prices.toml` under `[housebots]`, defaulting to
   random $0.002, quiet $0.004, accuser $0.012, baseline $0.008, roughly a Haiku-class call.
   House seats follow every budget rule: they can go broke, go mute and fall back to random.
+- **Fines.** `prices.toml [penalties]` holds `hot_seat_fine` (default 0.10), the fraction
+  of the seat budget charged when a seat misses the hot seat. Fines debit the same ledger,
+  so a fine can flip a seat to broke; a post cut off in the floor drain is refunded.
 - The server, never the client, decides which seats are house bots: `ww final` knows the
   seats it fills, and `ww table` registers its seats through `POST /admin/house` with the
   operator token. The spectator labels them `house · <brain>`.
@@ -357,7 +409,7 @@ cmd = "uv run bot"                     # run inside the checkout
 
 ## CLI
 
-- `ww serve [--format practice|final] [--seats N] [--fake-llm] [--tables N] [--budget-usd X] [--min-window-s S] [--transition-s S] [--discussion-s S] [--max-posts N]`
+- `ww serve [--format practice|final] [--seats N] [--fake-llm] [--tables N] [--budget-usd X] [--min-window-s S] [--transition-s S] [--discussion-s S] [--max-posts N] [--floor-s S] [--hot-seat-s S] [--hot-seat-answer-s S]`
 - `ww table --bots random,quiet,accuser,baseline,...` runs house bots against a server;
   it registers its seats with `POST /admin/house` (operator token) before starting.
 - `ww tokens` prints seat tokens for a table.

@@ -189,16 +189,15 @@ def test_turn_id_changes_each_window() -> None:
     assert len(seen) > 1
 
 
-def test_post_rate_limit_and_max_posts() -> None:
+def test_max_posts_limit() -> None:
+    # The 5s gap is the server floor's job now; the engine keeps max_posts.
     game = Game(config(seed=7, max_posts=2))
     end_night(game)
     seat = game.alive()[0]
     game.act(seat, Post(chat="one"), now=0.0)
-    with pytest.raises(IllegalAction, check=lambda e: e.code == "too_fast"):
-        game.act(seat, Post(chat="two"), now=3.0)
-    game.act(seat, Post(chat="two"), now=6.0)
+    game.act(seat, Post(chat="two"), now=1.0)
     with pytest.raises(IllegalAction, check=lambda e: e.code == "no_posts_left"):
-        game.act(seat, Post(chat="three"), now=12.0)
+        game.act(seat, Post(chat="three"), now=2.0)
 
 
 def test_reply_to_must_be_public_post_this_day() -> None:

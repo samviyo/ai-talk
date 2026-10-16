@@ -46,13 +46,14 @@ async def _maybe_buy_vote(session: ClientSession, turn: dict) -> None:
 
 async def _discuss(session: ClientSession, llm, config: BotConfig,
                    my_role: str, turn: dict) -> None:
-    """Live-chat loop: one opener, then reply to mentions while posts remain."""
+    """Live-chat loop: opener, free replies, hot seat, reactions on news."""
     turn_id = turn["turn_id"]
     cursor = int(turn.get("board_cursor") or 0)
     deadline_s = float(turn.get("deadline_s") or 0)
     started = asyncio.get_event_loop().time()
     opened = False
     reserve = 1
+    news_cursor: int | None = None  # event cursor for wait_for_turn(since=...)
     while True:
         left = deadline_s - (asyncio.get_event_loop().time() - started)
         if left <= 1.0 or llm.broke:
@@ -67,30 +68,105 @@ async def _discuss(session: ClientSession, llm, config: BotConfig,
         posts_left = int(board.get("posts_left", 0))
         mentions = turn.get("mentions") or []
         want = None
-        if not opened and posts_left > reserve:
-            want = "opener"
-        elif mentions and posts_left > 0:
-            want = "reply"
-        if want:
-            prompt = decide_prompt(
-                "day_discussion", "post", my_role, posts, [],
-                _format_announcements(turn.get("announcements", [])),
+        owe = turn.get("you_owe")
+        if owe == "reply":
+            # A granted reply is free: it doesn't spend a post.
+            prompt = (
+                f"Seat {turn.get('from')} accused you: {turn.get('chat', '')!r}\n"
+                "Reply in one short line (<=280 chars), nothing else."
             )
             reply = llm.complete(
-                config.decide_model, prompt, timeout_s=max(1.0, left - 3.0)
+                config.decide_model, prompt, timeout_s=max(1.0, left - 3.0),
+                max_tokens=128,
+            )
+            if llm.broke:
+                return
+            chat = reply[:280] or "I disagree."
+            args: dict = {"turn_id": turn_id, "chat": chat}
+            if turn.get("reply_to") is not None:
+                args["reply_to"] = turn["reply_to"]
+            await _call(session, "post", args)
+        elif owe == "hot_seat":
+            # 5s speed test: no reasoning, a handful of tokens.
+            prompt = (
+                f"Hot seat, answer fast, one short line: {turn.get('prompt', '')}"
+            )
+            reply = llm.complete(
+                config.decide_model, prompt, timeout_s=4.0,
+                max_tokens=48, fast=True,
             )
             if llm.broke:
                 return
             chat = reply[:280] or "No comment."
-            out = await _call(session, "post", {"turn_id": turn_id, "chat": chat})
-            if isinstance(out, dict) and not out.get("error"):
-                opened = True
-        turn = await _call(session, "wait_for_turn", {"timeout_s": 3})
+            await _call(session, "post", {"turn_id": turn_id, "chat": chat})
+        else:
+            if not opened and posts_left > reserve:
+                want = "opener"
+            elif mentions and posts_left > 0:
+                want = "reply"
+            if want:
+                prompt = decide_prompt(
+                    "day_discussion", "post", my_role, posts, [],
+                    _format_announcements(turn.get("announcements", [])),
+                )
+                reply = llm.complete(
+                    config.decide_model, prompt, timeout_s=max(1.0, left - 3.0)
+                )
+                if llm.broke:
+                    return
+                chat = reply[:280] or "No comment."
+                out = await _call(session, "post", {"turn_id": turn_id, "chat": chat})
+                if isinstance(out, dict) and not out.get("error"):
+                    opened = True
+        args = {"timeout_s": 3}
+        if news_cursor is not None:
+            args["since"] = news_cursor
+        turn = await _call(session, "wait_for_turn", args)
         if not isinstance(turn, dict) or turn.get("status") == "over":
             return
+        if isinstance(turn.get("cursor"), int):
+            news_cursor = turn["cursor"]
+        if turn.get("status") == "news":
+            await _on_news(session, llm, config, turn)
+            continue
         if turn.get("phase") not in (None, "day_discussion"):
             return
         await asyncio.sleep(1.05)
+
+
+async def _on_news(session: ClientSession, llm, config: BotConfig,
+                   news: dict) -> None:
+    """At most one LLM call per news batch: react, or ignore."""
+    posts = []
+    for e in news.get("events") or []:
+        if isinstance(e, dict) and e.get("kind") == "posts_revealed":
+            posts.extend(e.get("posts") or [])
+    posts = [p for p in posts if isinstance(p.get("id"), int)]
+    if not posts:
+        return
+    # Reactions are cheap; at most one per news batch.
+    lines = "\n".join(f"post {p['id']} by seat {p.get('seat')}: {p.get('chat')}"
+                      for p in posts[:5])
+    prompt = (
+        "New board posts:\n" + lines + "\n\n"
+        "Reactions are cheap (agree|doubt|suspect). Reply with JSON "
+        '{"react": <post_id>, "kind": "agree|doubt|suspect"} or {"react": null}.'
+    )
+    reply = llm.complete(config.decide_model, prompt, timeout_s=3.0, max_tokens=32)
+    if llm.broke or not reply:
+        return
+    try:
+        data = json.loads(reply)
+        post_id = data.get("react")
+        kind = data.get("kind")
+    except (json.JSONDecodeError, AttributeError):
+        return
+    if isinstance(post_id, int) and kind in ("agree", "doubt", "suspect"):
+        await _llm_free_react(session, post_id, kind)
+
+
+async def _llm_free_react(session: ClientSession, post_id: int, kind: str) -> None:
+    await _call(session, "react", {"post_id": post_id, "kind": kind})
 
 
 def _format_announcements(announcements: list) -> list[str]:

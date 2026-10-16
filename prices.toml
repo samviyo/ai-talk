@@ -37,3 +37,7 @@ whisper = 0.08
 double_vote = 0.15
 shield = 0.20
 frame = 0.15
+
+# Fines as a fraction of the seat budget, charged through the same ledger.
+[penalties]
+hot_seat_fine = 0.10

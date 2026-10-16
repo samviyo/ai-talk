@@ -69,6 +69,10 @@ def _build_view(game: Game, seat: int) -> dict[str, Any]:
         "announcements": [],
         "deadline_s": game.window_s(),
     }
+    # Offline games have no floor: a granted reply shows up as you_owe="reply".
+    reply = game.reply_owed(seat)
+    if reply is not None and game.phase == "day_discussion":
+        turn = {**turn, "you_owe": "reply", **reply}
     return {
         "seat": seat,
         "role": role,

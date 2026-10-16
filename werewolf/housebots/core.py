@@ -55,6 +55,14 @@ class BaseBrain:
         self._observe(view)
         owe = (view.get("turn") or {}).get("you_owe")
         intent = view.get("intent")
+        if owe == "reply":
+            return self._reply(view)
+        if owe == "hot_seat":
+            if intent == "news":  # stale wake: the hot seat is already settled
+                return None
+            return self._hot_seat(view)
+        if intent == "news":
+            return self._react(view)
         if intent in ("opener", "reply", "talk"):
             return self._chat(view, intent)
         if owe == "vote":
@@ -64,6 +72,41 @@ class BaseBrain:
         if owe in ("night_kill", "seer_check", "doctor_save"):
             return self._night(view, owe)
         return None
+
+    def _reply(self, view: View) -> Action | None:
+        """A granted reply is free; every brain answers an accusation."""
+        frm = (view.get("turn") or {}).get("from", "?")
+        reply_to = (view.get("turn") or {}).get("reply_to")
+        args: dict[str, Any] = {
+            "chat": self.rng.choice(REPLY_LINES).format(from_seat=frm),
+        }
+        if reply_to is not None:
+            args["reply_to"] = reply_to
+        return {"tool": "post", "args": args, "reason": "using my right of reply"}
+
+    def _hot_seat(self, view: View) -> Action | None:
+        """Answer the prompt with one short line; the quiet brain may freeze."""
+        return {
+            "tool": "post",
+            "args": {"chat": self.rng.choice(HOT_SEAT_LINES)},
+            "reason": "answering the hot seat",
+        }
+
+    def _react(self, view: View) -> Action | None:
+        """News batch: react to at most one fresh post; most brains stay quiet."""
+        return None
+
+    def _fresh_posts(self, view: View) -> list[dict[str, Any]]:
+        """Posts the news batch brought, not the seat's own."""
+        me = view.get("seat")
+        out = []
+        for e in (view.get("turn") or {}).get("news_events") or []:
+            if e.get("kind") != "posts_revealed":
+                continue
+            for p in e.get("posts") or []:
+                if isinstance(p.get("id"), int) and p.get("seat") != me:
+                    out.append(p)
+        return out
 
     def _chat(self, view: View, intent: str) -> Action | None:
         return None
@@ -128,6 +171,22 @@ class BaseBrain:
         if not candidates:
             return None
         return most_accused(view, candidates, self.rng) or self.rng.choice(candidates)
+
+
+REPLY_LINES = [
+    "You called me out, {from_seat}? Explain yourself.",
+    "I heard that, seat {from_seat}. Bold.",
+    "Seat {from_seat} names me and expects silence? No.",
+    "Interesting, seat {from_seat}. I disagree.",
+]
+
+HOT_SEAT_LINES = [
+    "I trust the quiet ones least. Wolves love silence.",
+    "Yesterday's vote was the best read I had. I stand by it.",
+    "I think the doctor should keep their head down. No names.",
+    "Nothing yet. Watch who pushes a pile today.",
+    "I suspect whoever avoids the question. Ask them.",
+]
 
 
 def most_accused(view: View, candidates: list[int], rng: random.Random) -> int | None:

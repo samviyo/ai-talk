@@ -39,7 +39,7 @@ def test_revealed_post_fields_match_board_shape() -> None:
     post = next(p for p in reveal.data["posts"] if p["seat"] == seat)
     assert set(post) == {
         "id", "seat", "day", "round", "chat", "claimed_role", "accuse",
-        "reply_to", "nominate", "second",
+        "reply_to", "nominate", "second", "reactions",
     }
     assert post["day"] == 1
     assert post["claimed_role"] == "doctor"

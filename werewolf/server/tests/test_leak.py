@@ -98,6 +98,49 @@ def _assert_private_events_hidden(body: str, seat: int, g) -> None:
     # mentions reach only the named seat
     for m in re.finditer(r'"kind": "mention"[^{}]*"seat": (\d+)', body):
         assert int(m.group(1)) == seat, f"seat {seat} saw a mention for another seat"
+    # reply grants reach only the accused seat
+    for m in re.finditer(r'"kind": "reply_owed"[^{}]*"seat": (\d+)', body):
+        assert int(m.group(1)) == seat, f"seat {seat} saw another seat's reply grant"
+    # the hot-seat prompt is moderator business for that seat alone
+    for m in re.finditer(r'"you_owe": "hot_seat"', body):
+        pass  # only ever served to the hot seat's own caller
+
+
+def test_hot_seat_prompt_only_reaches_the_picked_seat(tmp_path: Path) -> None:
+    """An owed hot-seat prompt shows in no other seat's MCP responses."""
+    import asyncio
+
+    from .conftest import mcp_call, start_server
+    from .test_livechat import _advance_to_discussion
+
+    async def run() -> None:
+        srv = await start_server(tmp_path, seed=77, window_s=60.0, discussion_s=60.0)
+        try:
+            table = srv.state.tables[0]
+            table.hot_seat_s = 0.1
+            await _advance_to_discussion(table)
+            async with table.cond:
+                table._dead_air_since -= 1.0
+                await table.check_clock_locked()
+            hot = table._hot_active["seat"]
+            prompt = table._hot_active["prompt"]
+            own = await mcp_call(srv.url, srv.token(hot), "wait_for_turn",
+                                 {"timeout_s": 2})
+            assert own.get("you_owe") == "hot_seat"
+            assert own.get("prompt") == prompt
+            other = next(s for s in range(7) if s != hot)
+            async with table.cond:
+                table._served_turn[other] = f"discuss:{table.game.turn_id}"
+                table.seats[other].since["board"] = table.game._post_seq
+                table.seats[other].since["announce"] = len(table.game._events)
+            theirs = await mcp_call(srv.url, srv.token(other), "wait_for_turn",
+                                    {"timeout_s": 0.5})
+            assert prompt not in json.dumps(theirs), "hot-seat prompt leaked"
+            assert theirs.get("you_owe") != "hot_seat"
+        finally:
+            await srv.stop()
+
+    asyncio.run(run())
 
 
 @pytest.mark.parametrize("seed", [101, 202, 303, 404, 505, 606, 707, 808, 909, 1010,

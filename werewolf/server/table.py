@@ -27,6 +27,19 @@ ANNOUNCEMENT_KINDS = {
     "death", "no_death", "seer_result", "phase", "result", "vote_skipped",
 }
 DAY_PHASES = ("day_discussion", "defence", "day_vote")
+DRAIN_S = 20.0  # floor drains for this long after discussion_s ends
+NEWS_KINDS = {
+    "posts_revealed", "reaction", "nomination", "seconded", "standing",
+    "death", "phase", "hot_seat_pass",
+}
+HOT_SEAT_PROMPTS = [
+    "Who do you trust least, and why?",
+    "Defend your vote yesterday.",
+    "Name one seat you think is innocent.",
+    "What did you notice last night?",
+    "Who is playing too quietly?",
+]
+DEFAULT_HOT_SEAT_FINE = 0.10  # fraction of the seat budget
 
 
 def _is_transition(prev: str | None, new: str) -> bool:
@@ -36,7 +49,16 @@ def _is_transition(prev: str | None, new: str) -> bool:
     return (prev == "night") != (new == "night")
 
 # Per-game counters, reset when a new game starts at the same table.
-SINCE_KEYS = ("events", "wolf_chat", "board", "announce", "whisper")
+SINCE_KEYS = ("events", "wolf_chat", "board", "announce", "whisper", "news")
+
+
+@dataclass
+class FloorPost:
+    seat: int
+    post: dict[str, Any]
+    kind: str  # "normal" | "reply" | "hot" | "defence"
+    charged: float = 0.0
+    grant: dict[str, Any] | None = None  # reply grant to restore if dropped
 
 
 @dataclass
@@ -70,6 +92,10 @@ class Table:
         min_window_s: float = 0.0,
         transition_s: float = 0.0,
         transition_on_start: bool = True,
+        floor_s: float = 4.0,
+        hot_seat_s: float = 6.0,
+        hot_seat_answer_s: float = 5.0,
+        hot_seat_fine: float = DEFAULT_HOT_SEAT_FINE,
     ) -> None:
         self.name = name
         self.config = config
@@ -85,6 +111,7 @@ class Table:
         self.lock = asyncio.Lock()
         self.cond = asyncio.Condition(self.lock)
         self.game = Game(config)
+        self.game.floor_queued = True  # server floor owns release timing
         self._rng = random.Random(config.seed ^ 0x5EED)
         self._base_seed = config.seed
         self._game_seq = 0
@@ -111,6 +138,21 @@ class Table:
         self._transition_until = (
             time.monotonic() + self.transition_s if transition_on_start else 0.0
         )
+        # discussion floor: one voice at a time
+        self.floor_s = floor_s
+        self.hot_seat_s = hot_seat_s
+        self.hot_seat_answer_s = hot_seat_answer_s
+        self.hot_seat_fine_frac = hot_seat_fine
+        self._floor_queue: list[FloorPost] = []
+        self._floor_hold: float | None = None
+        self._drain_deadline: float | None = None
+        self._hot_active: dict[str, Any] | None = None
+        self._hot_today: set[int] = set()
+        self._hot_day = 0
+        self._dead_air_since = time.monotonic()
+        self._speaking_seat: int | None = None
+        self._cut_offs: list[dict[str, Any]] = []  # public, emit at day end
+        self._hot_passes: list[dict[str, Any]] = []
 
     # --- game lifecycle ------------------------------------------------------
 
@@ -123,7 +165,17 @@ class Table:
         self._run_written = False
         self._served_turn = {}
         self._thoughts = []
+        self._floor_queue = []
+        self._floor_hold = None
+        self._speaking_seat = None
+        self._drain_deadline = None
+        self._hot_active = None
+        self._hot_today = set()
+        self._hot_day = 0
+        self._cut_offs = []
+        self._hot_passes = []
         self.game = Game(replace(self.config, seed=seed))
+        self.game.floor_queued = True  # server floor owns release timing
         self.traces = []
         self.window_opened = time.monotonic()
         self.idle = False
@@ -219,14 +271,24 @@ class Table:
         """Caller holds the lock; opens/clock-advances windows, applies fallback."""
         g = self.game
         self.note_window_locked()
+        now = time.monotonic()
+        if g.phase == "day_discussion" and g.result is None and not self.frozen:
+            self._pump_floor_locked()
+            self._check_hot_seat_locked(now)
         if (
             g.result is None
             and not self.frozen
-            and time.monotonic() >= self.deadline()
+            and now >= self.deadline()
         ):
             if g.phase == "day_discussion":
-                # the timed window runs its full length, then closes
-                g.close_discussion()
+                self._hot_active = None
+                if self._drain_deadline is None:
+                    self._drain_deadline = now + DRAIN_S
+                if self._floor_queue and now < self._drain_deadline:
+                    # drain: keep releasing every floor_s for up to DRAIN_S
+                    self._pump_floor_locked()
+                else:
+                    self._cut_off_and_close_locked()
             else:
                 for seat in list(g.pending()):
                     self._fallback_locked(seat)
@@ -259,7 +321,266 @@ class Table:
             self.window_opened = time.monotonic()
             if _is_transition(self._prev_phase, self.game.phase):
                 self._transition_until = self.window_opened + self.transition_s
+            if self.game.phase == "defence":
+                self._floor_hold = None  # defence post releases on acceptance
+            if self.game.phase not in ("day_discussion", "defence"):
+                self._hot_active = None
             self._prev_phase = self.game.phase
+
+    # --- the discussion floor -------------------------------------------------
+
+    @property
+    def _floor_speaking(self) -> int | None:
+        return self._speaking_seat
+
+    def submit_discussion_post_locked(
+        self, seat: int, action: Post, charge: float
+    ) -> dict[str, Any]:
+        """Validate through the engine, then queue instead of publishing."""
+        g = self.game
+        now = time.monotonic()
+        if self.is_broke(seat):
+            return {"error": "broke", "message": "seat budget exhausted"}
+        if self.phase_flags(seat):
+            return {"error": "still_queued"}
+        if self._speaking_seat == seat and self._floor_hold is not None:
+            if time.monotonic() < self._floor_hold:
+                return {"error": "still_queued"}
+        is_hot = self._hot_active is not None and self._hot_active["seat"] == seat
+        if is_hot and now >= self._hot_active["deadline"]:
+            # The answer window has shut: the fine lands and this is a normal post.
+            self._hot_pass_locked()
+            is_hot = False
+            if self.phase_flags(seat):
+                return {"error": "still_queued"}
+        grant = g.reply_owed(seat) if action.reply_to is not None else None
+        try:
+            if is_hot:
+                # In time: free, outside max_posts and the 5s gap.
+                g._check_seat(seat)
+                if seat not in g.alive():
+                    raise IllegalAction("dead_seat")
+                g._validate_post(seat, action, "defence", now)
+                post = g._record_post(seat, action, now)
+                g._posts_today[seat] = g._posts_today.get(seat, 0) - 1
+                post["is_reply"] = True  # so the drop never refunds a count
+                g.take_pending_release(seat)
+            else:
+                g.act(seat, action, now=now)
+                post = g.take_pending_release(seat)
+        except IllegalAction as e:
+            return {"error": e.code, "message": e.msg}
+        assert post is not None
+        is_reply = bool(post.get("is_reply")) and not is_hot
+        kind = "hot" if is_hot else "reply" if is_reply else "normal"
+        entry = FloorPost(seat, post, kind, charged=charge, grant=grant)
+        position = self._enqueue_locked(entry)
+        if charge:
+            self.charge_locked(seat, charge)
+        return {"ok": True, "queued": position}
+
+    def seat_queued(self, seat: int) -> bool:
+        return self.phase_flags(seat)
+
+    def _enqueue_locked(self, entry: FloorPost) -> int:
+        """Replies and hot-seat answers jump the queue, behind the speaker."""
+        now = time.monotonic()
+        speaking = self._floor_hold is not None and now < self._floor_hold
+        if entry.kind in ("reply", "hot") and (speaking or self._floor_queue):
+            self._floor_queue.insert(0, entry)
+            position = 0
+        else:
+            position = len(self._floor_queue)
+            self._floor_queue.append(entry)
+        self._pump_floor_locked()
+        return position
+
+    def phase_flags(self, seat: int) -> bool:
+        return any(e.seat == seat for e in self._floor_queue)
+
+    def _unemit_locked(self, kind: str) -> None:
+        g = self.game
+        for e in reversed(g._events):
+            if e.kind == kind:
+                g._events.remove(e)
+                return
+
+    def _pump_floor_locked(self) -> None:
+        """Release the next queued post once the floor opens; caller holds lock."""
+        now = time.monotonic()
+        changed = False
+        if self._floor_queue and (
+            self._floor_hold is None or now >= self._floor_hold
+        ):
+            entry = self._floor_queue.pop(0)
+            self.game.release_post(entry.seat, entry.post)
+            # Release counts as the seat's last post time for the 5s gap.
+            if not entry.post.get("is_reply") and entry.kind != "hot":
+                self.game._post_times[entry.seat] = now
+            self._floor_hold = now + self.floor_s
+            self._speaking_seat = entry.seat
+            self._dead_air_since = now
+            if (
+                entry.kind == "hot"
+                and self._hot_active
+                and self._hot_active["seat"] == entry.seat
+            ):
+                self._hot_active = None
+            changed = True
+        if changed or self._speaking_expired(now):
+            self._push_sse_locked(self._floor_payload())
+
+    def _speaking_expired(self, now: float) -> bool:
+        if self._floor_hold is None or self._speaking_seat is None:
+            return False
+        if now < self._floor_hold:
+            return False
+        self._speaking_seat = None
+        self._floor_hold = None
+        return True
+
+    def _floor_payload(self) -> dict[str, Any]:
+        return {
+            "kind": "floor",
+            "speaking": self._speaking_seat,
+            "queue": [e.seat for e in self._floor_queue],
+        }
+
+    def _cut_off_and_close_locked(self) -> None:
+        """End of drain: drop what's left, then close the discussion window."""
+        self._drain_deadline = None
+        dropped = self.drop_floor_locked()
+        if dropped:
+            self._cut_offs.append({"kind": "cut_off", "seats": sorted(dropped)})
+        self.game.close_discussion()
+        self._flush_day_end_events_locked()
+
+    def hot_seat_prompt_locked(self, seat: int) -> dict[str, Any] | None:
+        """The open hot-seat obligation for wait_for_turn/read_board."""
+        hot = self._hot_active
+        if hot is None or hot["seat"] != seat:
+            return None
+        return {
+            "prompt": hot["prompt"],
+            "deadline_s": round(max(0.0, hot["deadline"] - time.monotonic()), 2),
+        }
+
+    def _flush_day_end_events_locked(self) -> None:
+        """Cut-offs and hot-seat passes become public when the window closes."""
+        g = self.game
+        for c in self._cut_offs:
+            g._emit("cut_off", {"seats": c["seats"]})
+        for p in self._hot_passes:
+            g._emit("hot_seat_pass", {"seat": p["seat"], "fine_usd": p["fine_usd"]})
+        self._cut_offs = []
+        self._hot_passes = []
+
+    # --- the hot seat ----------------------------------------------------------
+
+    def _floor_busy(self, now: float) -> bool:
+        speaking = self._floor_hold is not None and now < self._floor_hold
+        return speaking or bool(self._floor_queue)
+
+    def _check_hot_seat_locked(self, now: float) -> None:
+        """Dead air in discussion: put the quietest seat on the hot seat."""
+        if self._drain_deadline is not None:
+            return  # never during the drain
+        if now < self.deadline():
+            pass  # normal window; deadline() check is the drain trigger
+        if self._hot_active is not None:
+            # A queued/answered post by the hot seat is handled at release time.
+            if now >= self._hot_active["deadline"]:
+                self._hot_pass_locked()
+            else:
+                return
+            if self._floor_busy(now) or now - self._dead_air_since < self.hot_seat_s:
+                return
+        elif self._floor_busy(now):
+            self._dead_air_since = now
+            return
+        if now >= self.deadline():
+            return  # the drain owns the floor now
+        if now - self._dead_air_since < self.hot_seat_s:
+            return
+        if self._hot_day != self.game.day:
+            self._hot_day = self.game.day
+            self._hot_today = set()
+        exclude = set(self._hot_today)
+        seat = self.game.hot_seat_pick(exclude)
+        if seat is None and exclude:
+            # everyone has been hot: restart the rotation
+            self._hot_today = set()
+            seat = self.game.hot_seat_pick(set())
+        if seat is None:
+            return
+        prompt = self._rng.choice(HOT_SEAT_PROMPTS)
+        fine = round(self.hot_seat_fine_frac * self.budget_usd, 6)
+        self._hot_today.add(seat)
+        self._hot_active = {
+            "seat": seat,
+            "prompt": prompt,
+            "fine": fine,
+            "deadline": now + self.hot_seat_answer_s,
+        }
+        self._push_sse_locked({
+            "kind": "hot_seat",
+            "seat": seat,
+            "prompt": prompt,
+            "deadline_s": self.hot_seat_answer_s,
+            "fine_usd": fine,
+        })
+        # No fresh dead-air credit for being picked: the floor was already empty.
+        self._dead_air_since = now
+
+    def _hot_pass_locked(self) -> None:
+        hot = self._hot_active
+        self._hot_active = None
+        if hot is None:
+            return
+        seat = hot["seat"]
+        fine = hot["fine"]
+        charged = 0.0
+        if not self.is_broke(seat):
+            # Charge through the same ledger; it can flip the seat broke.
+            self.charge_locked(seat, fine)
+            charged = fine
+        payload = {"seat": seat, "fine_usd": charged}
+        self._hot_passes.append({"kind": "hot_seat_pass", **payload})
+        self._push_sse_locked({"kind": "hot_seat_pass", **payload})
+        self._dead_air_since = time.monotonic()
+
+    def drop_floor_locked(self) -> list[int]:
+        """Discussion over: drop queued posts, refund, restore grants."""
+        if not self._floor_queue:
+            self._floor_hold = None
+            self._speaking_seat = None
+            return []
+        seats = [e.seat for e in self._floor_queue]
+        g = self.game
+        for e in self._floor_queue:
+            if e.charged:
+                self.charge_locked(e.seat, -e.charged)
+            if not e.post.get("is_reply") and e.kind != "hot" and e.post["day"] == g.day:
+                g._posts_today[e.seat] = g._posts_today.get(e.seat, 0) - 1
+                g._post_times.pop(e.seat, None)
+            if e.post["nominate"] is not None:
+                g._nominated_today.discard(e.seat)
+                nom = g._nominations.get(e.post["nominate"])
+                if nom is not None and nom["by"] == e.seat and not nom["seconds"]:
+                    del g._nominations[e.post["nominate"]]
+            if e.post["second"] is not None:
+                g._seconded_today.discard(e.seat)
+                nom = g._nominations.get(e.post["second"])
+                if nom is not None:
+                    nom["seconds"].discard(e.seat)
+            if e.grant is not None:
+                g._reply_grants.setdefault(e.seat, {})[e.grant["from"]] = e.grant
+        self._floor_queue = []
+        self._floor_hold = None
+        self._speaking_seat = None
+        self._push_sse_locked({"kind": "cut_off", "seats": sorted(seats)})
+        self._push_sse_locked(self._floor_payload())
+        return seats
 
     def _fallback_locked(self, seat: int) -> None:
         t0 = time.monotonic()

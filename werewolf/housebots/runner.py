@@ -172,6 +172,7 @@ async def _run_discussion(
     started = asyncio.get_event_loop().time()
     opened = False
     reserve = 1  # keep one post for replies
+    news_cursor = int(turn.get("board_cursor") or 0)  # event cursor for since=
 
     while True:
         cursor = await _refresh_board(session, view, cursor)
@@ -185,7 +186,12 @@ async def _run_discussion(
         view["mentions"] = mentions
         posts_left = view.get("posts_left", 0)
         action = None
-        if not opened and elapsed >= opener_at and posts_left > reserve:
+        owe = turn.get("you_owe")
+        if owe == "reply":
+            action = brain.decide(view)  # free; does not spend a post
+        elif owe == "hot_seat":
+            action = brain.decide(view)
+        elif not opened and elapsed >= opener_at and posts_left > reserve:
             action = brain.decide({**view, "intent": "opener"})
             opened = True
         elif mentions and posts_left > 0:
@@ -194,9 +200,12 @@ async def _run_discussion(
             action = brain.decide({**view, "intent": "talk"})
         if action is not None:
             args = dict(action.get("args") or {})
-            args["turn_id"] = turn["turn_id"]
+            if action["tool"] != "react":
+                args["turn_id"] = turn["turn_id"]
             result = await _call(session, action["tool"], args)
-            if result.get("error") in ("too_fast", "no_posts_left", "broke", "stale_turn"):
+            if result.get("error") in (
+                "too_fast", "no_posts_left", "broke", "stale_turn", "still_queued",
+            ):
                 await asyncio.sleep(POLL_GAP_S)
             cursor = await _refresh_board(session, view, cursor)
         # power-up purchase: at most one consideration per discussion
@@ -205,9 +214,23 @@ async def _run_discussion(
             args = dict(buy.get("args") or {})
             args["turn_id"] = turn["turn_id"]
             await _call(session, "buy", args)
-        nxt = await _call(session, "wait_for_turn", {"timeout_s": min(2.0, left)})
+        nxt = await _call(
+            session,
+            "wait_for_turn",
+            {"timeout_s": min(2.0, left), "since": news_cursor},
+        )
         if nxt.get("status") == "over":
             return cursor
+        if nxt.get("cursor") is not None:
+            news_cursor = int(nxt["cursor"])
+        if nxt.get("status") == "news":
+            # one batched reaction decision per news wake
+            reaction = brain.decide({
+                **view, "intent": "news",
+                "turn": {**turn, "news_events": nxt.get("events") or []},
+            })
+            if reaction is not None and reaction["tool"] == "react":
+                await _call(session, "react", dict(reaction.get("args") or {}))
         # keep the discussion turn_id; only swap when a real turn payload arrives
         if nxt.get("turn_id"):
             if nxt.get("phase") != "day_discussion":

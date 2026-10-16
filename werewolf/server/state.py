@@ -45,6 +45,10 @@ class AppState:
         transition_s: float = 0.0,
         house_prices: dict[str, float] | None = None,
         powerup_prices: dict[str, float] | None = None,
+        floor_s: float = 4.0,
+        hot_seat_s: float = 6.0,
+        hot_seat_answer_s: float = 5.0,
+        hot_seat_fine: float = 0.10,
     ) -> None:
         self.config = config
         self.budget_usd = budget_usd
@@ -84,6 +88,10 @@ class AppState:
                 auto_restart=auto_restart,
                 min_window_s=min_window_s,
                 transition_s=transition_s,
+                floor_s=floor_s,
+                hot_seat_s=hot_seat_s,
+                hot_seat_answer_s=hot_seat_answer_s,
+                hot_seat_fine=hot_seat_fine,
             )
             self.tables.append(table)
             for s, tok in enumerate(tokens):

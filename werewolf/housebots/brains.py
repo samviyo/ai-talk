@@ -59,6 +59,21 @@ class RandomBrain(BaseBrain):
                     "reason": "making noise"}
         return None
 
+    def _react(self, view: View) -> Action | None:
+        posts = self._fresh_posts(view)
+        if not posts or self.rng.random() > 0.4:
+            return None
+        post = self.rng.choice(posts)
+        return {"tool": "react",
+                "args": {"post_id": post["id"],
+                         "kind": self.rng.choice(["agree", "doubt", "suspect"])},
+                "reason": "random reaction"}
+
+    def _hot_seat(self, view: View) -> Action | None:
+        if self.rng.random() < 0.2:
+            return None  # even random freezes sometimes
+        return super()._hot_seat(view)
+
     def maybe_buy(self, view: View) -> Action | None:
         if "whisper" in self._bought or self.rng.random() > 0.15:
             return None
@@ -74,6 +89,15 @@ class RandomBrain(BaseBrain):
 
 class QuietBrain(BaseBrain):
     """Rarely posts; follows a seer claim, else votes the most-accused candidate."""
+
+    def _react(self, view: View) -> Action | None:
+        # The quiet brain almost never reacts.
+        return None
+
+    def _hot_seat(self, view: View) -> Action | None:
+        if self.rng.random() < 0.5:
+            return None  # freezes on the hot seat about half the time
+        return super()._hot_seat(view)
 
     def _vote(self, view: View) -> Action | None:
         candidates = self._vote_candidates(view)
@@ -148,6 +172,21 @@ class AccuserBrain(BaseBrain):
             target = self.rng.choice(candidates)
         return {"tool": "vote", "args": {"seat": target},
                 "reason": "voting my accusation"}
+
+    def _react(self, view: View) -> Action | None:
+        """Suspect my target's posts; agree with accusations of them."""
+        target = self._target(view)
+        for p in self._fresh_posts(view):
+            if p.get("seat") == target:
+                return {"tool": "react",
+                        "args": {"post_id": p["id"], "kind": "suspect"},
+                        "reason": "marking my target"}
+        for p in self._fresh_posts(view):
+            if p.get("accuse") == target:
+                return {"tool": "react",
+                        "args": {"post_id": p["id"], "kind": "agree"},
+                        "reason": "backing an accusation of my target"}
+        return None
 
 
 class BaselineBrain(BaseBrain):
@@ -430,6 +469,22 @@ class BaselineBrain(BaseBrain):
         """No seer signal: follow the most-accused pile so the village stays coordinated."""
         target = most_accused(view, pool, self.rng)
         return target if target is not None else min(pool)
+
+    def _react(self, view: View) -> Action | None:
+        """Agree with accusations of my top suspect; doubt defences of them."""
+        suspect = self._weighted_most_accused(view, self._vote_candidates(view))
+        if suspect is None:
+            return None
+        for p in self._fresh_posts(view):
+            if p.get("accuse") == suspect:
+                return {"tool": "react",
+                        "args": {"post_id": p["id"], "kind": "agree"},
+                        "reason": f"backing the case on seat {suspect}"}
+            if p.get("seat") == suspect:
+                return {"tool": "react",
+                        "args": {"post_id": p["id"], "kind": "doubt"},
+                        "reason": f"doubting seat {suspect}'s defence"}
+        return None
 
     # -- night --------------------------------------------------------------
 

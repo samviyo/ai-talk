@@ -43,6 +43,15 @@ def _load_shop() -> tuple[dict[str, float], dict[str, float]]:
     return house, powerups
 
 
+def _load_penalties() -> dict[str, float]:
+    """prices.toml [penalties]; hot-seat fines as a fraction of the seat budget."""
+    path = Path("prices.toml")
+    if not path.exists():
+        return {}
+    raw = tomllib.loads(path.read_text())
+    return {k: float(v) for k, v in raw.get("penalties", {}).items()}
+
+
 def _load_teams() -> dict[str, str] | None:
     path = Path("teams.toml")
     if not path.exists():
@@ -64,6 +73,7 @@ def build_state(args: argparse.Namespace) -> AppState:
         max_posts=max_posts,
     )
     house_prices, powerup_prices = _load_shop()
+    penalties = _load_penalties()
     return AppState(
         config=config,
         n_tables=args.tables,
@@ -78,6 +88,10 @@ def build_state(args: argparse.Namespace) -> AppState:
         transition_s=args.transition_s,
         house_prices=house_prices or None,
         powerup_prices=powerup_prices or None,
+        floor_s=args.floor_s,
+        hot_seat_s=args.hot_seat_s,
+        hot_seat_answer_s=args.hot_seat_answer_s,
+        hot_seat_fine=penalties.get("hot_seat_fine", 0.10),
     )
 
 
@@ -207,6 +221,9 @@ def main() -> int:
         p.add_argument("--fake-llm", action="store_true")
         p.add_argument("--discussion-s", type=float, default=None)
         p.add_argument("--max-posts", type=int, default=None)
+        p.add_argument("--floor-s", type=float, default=4.0)
+        p.add_argument("--hot-seat-s", type=float, default=6.0)
+        p.add_argument("--hot-seat-answer-s", type=float, default=5.0)
 
     p_serve = sub.add_parser("serve")
     common(p_serve)

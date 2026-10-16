@@ -14,7 +14,7 @@ from mcp.types import CallToolResult, TextContent
 from werewolf.engine import DoctorSave, IllegalAction, NightKill, Post, SeerCheck, Vote
 
 from .state import AppState
-from .table import TOOL_CALL_BUDGET, Table
+from .table import NEWS_KINDS, TOOL_CALL_BUDGET, Table
 
 WAIT_DEFAULT_S = 25.0
 # Frozen clients use httpx's 5s default read timeout; long-poll must beat it.
@@ -51,6 +51,11 @@ TOOLS: list[tuple[str, dict[str, Any], list[str]]] = [
     ("read_wolf_chat", {"since": S}, []),
     ("get_budget", {}, []),
     ("shop", {}, []),
+    (
+        "react",
+        {"post_id": S, "kind": {"type": "string"}},
+        ["post_id", "kind"],
+    ),
     (
         "buy",
         {
@@ -163,10 +168,10 @@ class Dispatcher:
                     table.unfreeze_locked()
                     table.cond.notify_all()
                 return self._role(table, seat)
-            if over and name in ("post", "vote", "night_action", "wolf_chat", "buy"):
+            if over and name in ("post", "vote", "night_action", "wolf_chat", "buy", "react"):
                 return _err("not_your_turn", "game over")
             if not over:
-                if name in ("post", "vote", "night_action"):
+                if name in ("post", "vote", "night_action", "react"):
                     gate = self._gate_err(table)
                     if gate is not None:
                         return gate
@@ -194,6 +199,8 @@ class Dispatcher:
         self, table: Table, seat: int, args: dict[str, Any]
     ) -> dict[str, Any]:
         timeout = min(float(args.get("timeout_s") or WAIT_DEFAULT_S), WAIT_MAX_S)
+        since = args.get("since")
+        since = int(since) if since is not None else None
         deadline = time.monotonic() + timeout
         async with table.cond:
             while True:
@@ -210,6 +217,42 @@ class Dispatcher:
                         return {"status": "idle", "result": g.result}
                     return {"status": "over", "result": g.result}
                 announcements = table.announcements_locked(seat)
+                st = table.seats[seat]
+                if since is None:
+                    st.since["news"] = len(g.events(seat))
+                    news = None
+                else:
+                    # The client cursor indexes the seat's event view.
+                    st.since["news"] = max(st.since["news"], since)
+                    news = self._news_locked(table, seat, st.since["news"])
+                    if news:
+                        st.since["news"] = news["cursor"]
+                # Obligations beat news: reply and hot-seat first, then the rest.
+                owe = None
+                owe_extra: dict[str, Any] = {}
+                hot = table.hot_seat_prompt_locked(seat)
+                # Right of reply only binds while the discussion floor is open.
+                reply = g.reply_owed(seat) if g.phase == "day_discussion" else None
+                if reply is not None:
+                    owe, owe_extra = "reply", reply
+                elif hot is not None:
+                    owe, owe_extra = "hot_seat", hot
+                if owe is not None:
+                    out: dict[str, Any] = {
+                        "turn_id": table.public_turn_id(),
+                        "phase": g.phase,
+                        "day": g.day,
+                        "round": g.round,
+                        "you_owe": owe,
+                        "legal_targets": [],
+                        "announcements": announcements,
+                        "posts_left": g.posts_left(seat),
+                        "deadline_s": round(table.deadline() - time.monotonic(), 2),
+                        **owe_extra,
+                    }
+                    if news:
+                        out.update(news)
+                    return out
                 if g.phase == "day_discussion":
                     # Live chat: wake on an obligation-free discuss turn or new board.
                     serve_key = f"discuss:{g.turn_id}"
@@ -224,7 +267,7 @@ class Dispatcher:
                         if first:
                             cursor = g._post_seq  # opener wake: cursor to now
                             g._day_cursors[seat] = cursor
-                        return {
+                        out = {
                             "turn_id": table.public_turn_id(),
                             "phase": g.phase,
                             "day": g.day,
@@ -237,6 +280,9 @@ class Dispatcher:
                             "posts_left": g.posts_left(seat),
                             "deadline_s": round(table.deadline() - time.monotonic(), 2),
                         }
+                        if news:
+                            out.update(news)
+                        return out
                 else:
                     owe = g.pending().get(seat)
                     # Serve each window once per seat; re-polls wait for the next.
@@ -247,7 +293,7 @@ class Dispatcher:
                         and table._served_turn.get(seat) != g.turn_id
                     ):
                         table._served_turn[seat] = g.turn_id
-                        return {
+                        out = {
                             "turn_id": table.public_turn_id(),
                             "phase": g.phase,
                             "day": g.day,
@@ -257,6 +303,11 @@ class Dispatcher:
                             "announcements": announcements,
                             "deadline_s": round(table.deadline() - time.monotonic(), 2),
                         }
+                        if news:
+                            out.update(news)
+                        return out
+                if news:
+                    return news
                 now = time.monotonic()
                 remaining = deadline - now
                 if table.frozen:
@@ -273,6 +324,24 @@ class Dispatcher:
                     if time.monotonic() < deadline:
                         continue  # re-check after a hold boundary
                     return {"status": "waiting"}
+
+    def _news_locked(
+        self, table: Table, seat: int, since: int
+    ) -> dict[str, Any] | None:
+        """Public events after the seat's own view cursor `since`."""
+        g = table.game
+        events = g.events(seat)
+        if since >= len(events):
+            return None
+        hits = [e for e in events[since:] if e.audience is None and e.kind in NEWS_KINDS]
+        hits = hits[:10]
+        if not hits:
+            return None
+        return {
+            "status": "news",
+            "events": [e.to_dict() for e in hits],
+            "cursor": len(events),
+        }
 
     def _role(self, table: Table, seat: int) -> dict[str, Any]:
         g = table.game
@@ -300,6 +369,18 @@ class Dispatcher:
             "posts_left": state["posts_left"],
             "whispers": table.whispers_locked(seat),
         }
+        # A reply grant only binds while the discussion floor is open.
+        reply = state.get("reply_owed") if table.game.phase == "day_discussion" else None
+        if reply is not None:
+            out["you_owe"] = "reply"
+            out["reply_to"] = reply["reply_to"]
+            out["from"] = reply["from"]
+            out["chat"] = reply["chat"]
+        elif table.game.phase == "day_discussion":
+            hot = table.hot_seat_prompt_locked(seat)
+            if hot is not None:
+                out["you_owe"] = "hot_seat"
+                out["prompt"] = hot["prompt"]
         if table.game.phase == "day_discussion":
             out["discussion_ends_in_s"] = round(
                 max(0.0, table.deadline() - time.monotonic()), 2
@@ -312,23 +393,45 @@ class Dispatcher:
         stale = self._check_turn_id(table, args)
         if stale is not None:
             return stale
+        action = Post(
+            chat=str(args.get("chat") or ""),
+            claimed_role=args.get("claimed_role"),
+            accuse=args.get("accuse"),
+            reply_to=args.get("reply_to"),
+            nominate=args.get("nominate"),
+            second=args.get("second"),
+        )
+        if table.game.phase == "day_discussion":
+            # The floor queues accepted posts; visibility lands on release.
+            charge = self._house_price(table, seat, "post")
+            out = table.submit_discussion_post_locked(seat, action, charge)
+            if "error" in out:
+                return _err(out["error"], out.get("message", out["error"]))
+            return out
         try:
-            table.game.act(
-                seat,
-                Post(
-                    chat=str(args.get("chat") or ""),
-                    claimed_role=args.get("claimed_role"),
-                    accuse=args.get("accuse"),
-                    reply_to=args.get("reply_to"),
-                    nominate=args.get("nominate"),
-                    second=args.get("second"),
-                ),
-                now=time.monotonic(),
-            )
+            table.game.act(seat, action, now=time.monotonic())
         except IllegalAction as e:
             return _err(e.code, e.msg)
         self._charge_house(table, seat, "post")
         return {"ok": True, "posts_left": table.game.posts_left(seat)}
+
+    def _tool_react(self, table: Table, seat: int, args: dict) -> dict | CallToolResult:
+        if table.is_broke(seat):
+            return _err("broke", "seat budget exhausted")
+        try:
+            table.game.react(
+                seat, int(args.get("post_id")), str(args.get("kind") or "")
+            )
+        except (IllegalAction, TypeError, ValueError) as e:
+            code = e.code if isinstance(e, IllegalAction) else "bad_schema"
+            return _err(code, str(e))
+        return {"ok": True}
+
+    def _house_price(self, table: Table, seat: int, action: str) -> float:
+        brain = table.seats[seat].house
+        if not brain:
+            return 0.0
+        return float(self.state.house_prices.get(brain, 0.0))
 
     def _tool_vote(self, table: Table, seat: int, args: dict) -> dict | CallToolResult:
         stale = self._check_turn_id(table, args)
