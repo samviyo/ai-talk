@@ -153,11 +153,7 @@ def run_suite(views, scorers: list[tuple[str, object]], gates: dict[str, dict],
 
 def negative_control(scorers: list[tuple[str, object]], gates: dict[str, dict],
                      project: str | None = None) -> list[Row]:
-    """Built-in liveness check: the same scorers+gates over the known-bad negctl bot.
-
-    Per-scorer rows are diagnostics (info) unless the whole suite passes the bad
-    bot — then one gated RED row: the suite is dead.
-    """
+    """Run the suite over the known-bad negctl bot; a suite that passes it is dead."""
     if not any(gates.get(name) for name, _ in scorers):
         return []
     from .trace import game_views
@@ -169,11 +165,11 @@ def negative_control(scorers: list[tuple[str, object]], gates: dict[str, dict],
         r.name = f"negctl: {r.name}"
         if live:
             r.gate, r.ok = False, None  # red on the bad bot means live, not a failure
-    if not live:
-        rows.insert(0, Row(
-            "negative control", False,
-            "your suite passes a known-bad bot (always-vote-first-seat, seat 0)", True,
-        ))
+    rows.insert(0, Row(
+        "negative control", live,
+        "your gates catch the always-vote-seat-0 bot" if live
+        else "your suite passes a known-bad bot (always-vote-seat-0)", True,
+    ))
     return rows
 
 

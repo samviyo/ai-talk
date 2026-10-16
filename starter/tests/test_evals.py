@@ -112,7 +112,7 @@ def test_real_scorer_green_on_table1_red_on_negctl(tmp_path):
         harness.load_scorers(tmp_path), harness.load_gates(tmp_path / "gates.toml"))
     row = next(r for r in negctl if r.name == "negctl: score_vote_wolf")
     assert row.detail.startswith("mean 0.")
-    assert "negative control" not in [r.name for r in negctl]  # suite is live
+    assert negctl[0].name == "negative control" and negctl[0].ok is True  # suite is live
 
 
 def test_dataset_is_one_row_per_game_and_scored_seat():
