@@ -42,7 +42,11 @@ def run_suite(bot, scorers: list[Scorer], *, games: int, puzzles_n: int,
               seed: int, trials: int, send: bool) -> list[tuple[str, Any]]:
     """Run one suite (all datasets, all scorers) via Braintrust Eval()."""
     from braintrust import Eval
+    from braintrust.framework import ReporterDef
 
+    # No-op reporter: `reporter=False` falls back to Braintrust's noisy default.
+    quiet = ReporterDef(name="quiet", report_eval=lambda evaluator, result, verbose, jsonl: result,
+                        report_run=lambda results, verbose, jsonl: True)
     score_fns = [wrapped(s.fn) for s in scorers]
     return [
         (name, Eval(
@@ -52,6 +56,7 @@ def run_suite(bot, scorers: list[Scorer], *, games: int, puzzles_n: int,
             scores=score_fns,
             trial_count=trials,
             no_send_logs=not send,
+            reporter=quiet,
         ))
         for name in DATASETS
     ]
@@ -175,13 +180,14 @@ def main(argv: list[str] | None = None) -> int:
     ctrl_agg = _aggregate(run_suite(column0_bot.choose, scorers, **common),
                           scorers, args.trials)
     ctrl_rows = build_rows(ctrl_agg, gates)
-    print_scoreboard("negative control: column0_bot", ctrl_rows)
-    if not any(verdict == "RED" for _, verdict, _ in ctrl_rows):
-        print_scoreboard("negative control verdict", [
-            ("suite is live (column0 fails)", "RED",
-             "negative control: your suite passes column0_bot"),
-        ])
-        ok = False
+    live = any(verdict == "RED" for _, verdict, _ in ctrl_rows)
+    # Red on column0 means the suite is live, so its rows are diagnostics.
+    print_scoreboard("negative control: column0_bot", [
+        ("negative control", "GREEN", "column0_bot fails your gates") if live
+        else ("negative control", "RED", "your suite passes column0_bot"),
+        *((f"column0: {n}", "info", d) for n, _, d in ctrl_rows),
+    ])
+    ok = ok and live
 
     print(f"\n{GREEN if ok else RED}{'GREEN' if ok else 'RED'}{RESET}\n")
     return 0 if ok else 1

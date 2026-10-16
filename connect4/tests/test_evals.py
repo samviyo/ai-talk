@@ -54,7 +54,7 @@ def test_always_one_scorer_fails_negative_control(capsys, team_scorers):
     rc = _run(games=2, puzzles=4)
     out = capsys.readouterr().out
     assert rc != 0
-    assert "negative control: your suite passes column0_bot" in out
+    assert "your suite passes column0_bot" in out
 
 
 def test_column_scorer_green_for_solver_bot_red_for_column0(capsys, team_scorers):
@@ -81,12 +81,12 @@ def test_column_scorer_green_for_solver_bot_red_for_column0(capsys, team_scorers
         rc = _run(bot="perfect_test_bot:choose", games=2, puzzles=5)
         out = capsys.readouterr().out
         assert rc == 0, out
-        assert "negative control: your suite passes column0_bot" not in out
+        assert "your suite passes column0_bot" not in out
 
         rc0 = _run(bot="connect4.bots.column0_bot:choose", games=2, puzzles=5)
         out0 = capsys.readouterr().out
         assert rc0 != 0
-        assert "negative control: your suite passes column0_bot" not in out0
+        assert "your suite passes column0_bot" not in out0
     finally:
         del sys.modules["perfect_test_bot"]
 
