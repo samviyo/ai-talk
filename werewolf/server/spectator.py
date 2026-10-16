@@ -418,7 +418,7 @@ function onEvent(e){
       if(e.phase==='night'){onblock=new Set();quiet()}
       if(e.phase==='defence'&&e.seat!=null){spot(e.seat,'On the block · last words',null,true);floor={speaking:e.seat,queue:[]}}
       renderAll();
-      if(e.phase!=='over'){card(e);setPhase(e.phase,e.day,e.round);
+      if(e.phase!=='over'&&e.phase!=='reveal'){card(e);setPhase(e.phase,e.day,e.round);
       if(e.phase==='day_discussion'&&e.round===1){accuse={};drawAccused()}
       sys({night:'🌙 Night '+e.day,day_discussion:'☀️ Day '+e.day+' · round '+e.round,day_vote:'🗳️ Day '+e.day+' · vote'}[e.phase]||e.phase)}break;
     case 'posts_revealed':e.posts.forEach(post);break;
@@ -427,7 +427,7 @@ function onEvent(e){
     case 'night_result':if(e.kill_target!=null)den('<span class="sys">Wolves targeted seat '+e.kill_target+(e.save_target!=null?' · doctor guarded seat '+e.save_target:'')+(e.killed==null?' · <b>saved</b>':'')+'</span>');break;
     case 'vote_tally':countReveal(e);if(e.silent&&e.silent.length)sys('🤐 Stayed silent: seats '+e.silent.join(', '));break;
     case 'floor':floor={speaking:e.speaking??null,queue:e.queue||[]};renderAll();
-      $('upnext').textContent=floor.queue.length?'Up next: '+floor.queue.map(s=>'seat '+s).join(' · '):'';break;
+      $('upnext').textContent=floor.queue.length?'Up next: '+floor.queue.slice(0,3).map(s=>'seat '+s).join(' · ')+(floor.queue.length>3?' +'+(floor.queue.length-3):''):'';break;
     case 'reaction':{const k=e.reaction,icon=RX[k]||'❗',P=postEls[e.post_id];
       if(P){P.rx[k]=(P.rx[k]||0)+1;let r=P.el.querySelector('.rx');if(!r){r=document.createElement('div');r.className='rx';P.el.querySelector('.bubble').appendChild(r)}
         r.innerHTML=Object.entries(P.rx).map(([q,n])=>'<span>'+(RX[q]||q)+' '+n+'</span>').join('')}
@@ -485,7 +485,7 @@ function handle(m){
   if(m.kind==='init'){reset(m);return}
   if(m.kind==='tick'){
     if(!live){live=everLive=true;outcome=[]}
-    held=m.held_s||0;clockTick(m);
+    held=m.held_s<0?3600:(m.held_s||0);clockTick(m);
     const s=$('secs');s.className=held>0?'paused':'';s.textContent=held>0?'paused':(m.pending.length?Math.ceil(m.remaining_s)+'s':'');
     const pend=new Set(m.pending),think=new Set(m.thinking);
     m.seats.forEach(x=>{const d=meta[x.seat]=meta[x.seat]||{};d.spend=x.spent_usd;d.broke=x.broke;d.alive=x.alive;d.pending=pend.has(x.seat);d.thinking=think.has(x.seat);if(x.house)d.house=x.house;render(x.seat)});

@@ -842,10 +842,12 @@ class Table:
         g = self.game
         alive = set(g.alive())
         now = time.monotonic()
-        held = max(0.0, round(self.release_at() - now, 1))
+        release = self.release_at()
+        # Frozen tables release at inf, which JSON can't carry; -1 means held indefinitely.
+        held = -1.0 if release == float("inf") else max(0.0, round(release - now, 1))
         window = self.window_length()
         # The turn clock is paused during a hold: full window until release.
-        remaining = window if held > 0 else max(
+        remaining = window if held != 0 else max(
             0.0, round(self.deadline() - now, 1)
         )
         seats = []
