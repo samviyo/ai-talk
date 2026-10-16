@@ -113,3 +113,56 @@ def test_no_gate_is_info_row(capsys, team_scorers):
     assert rc != 0  # negative control still applies
     assert "info" in out
     assert "no gate" in out
+
+
+def test_raising_scorer_error_text_is_kept(capsys, team_scorers):
+    _install_scorers(
+        "def score_boom(input, output, expected=None, **kw):\n"
+        "    raise ValueError(\"missing expected columns\")\n",
+        "[score_boom]\nmin = 0.5\n")
+    rc = _run(games=2, puzzles=4)
+    out = capsys.readouterr().out
+    assert rc != 0
+    assert "error on" in out
+    assert "ValueError: missing expected columns" in out
+
+
+def test_scorer_error_on_negative_control_is_red_not_live(capsys, team_scorers):
+    # column0_bot only "fails" because the scorer crashed: RED, not liveness.
+    _install_scorers(
+        "def score_game_only(input, output, expected=None, **kw):\n"
+        "    if \"moves\" not in output:\n"
+        "        return None\n"
+        "    raise ValueError(\"missing expected columns\")\n",
+        "[score_game_only]\nmin = 0.5\n")
+    rc = _run(games=2, puzzles=4)
+    out = capsys.readouterr().out
+    assert rc != 0
+    assert "scorer errored on column0_bot" in out
+    assert "column0_bot fails your gates" not in out
+
+
+def test_all_raising_scorer_negative_control_is_red(capsys, team_scorers):
+    _install_scorers(
+        "def score_boom(input, output, expected=None, **kw):\n"
+        "    raise RuntimeError(\"boom\")\n",
+        "[score_boom]\nmin = 0.5\n")
+    rc = _run(games=1, puzzles=3)
+    out = capsys.readouterr().out
+    assert rc != 0
+    assert "scorer errored on column0_bot" in out
+    assert "column0_bot fails your gates" not in out
+
+
+def test_pass_k_is_computed_for_vs_random_only_scorer(capsys, team_scorers):
+    # Applies only to vs_random rows; pass^k must appear with --trials > 1.
+    _install_scorers(
+        "def score_moves_logged(input, output, expected=None, **kw):\n"
+        "    if \"moves\" not in output:\n"
+        "        return None\n"
+        "    return 1.0 if output[\"moves\"] else 0.0\n",
+        "[score_moves_logged]\nmin = 0.5\n")
+    rc = _run(games=2, puzzles=3, trials=2)
+    out = capsys.readouterr().out
+    assert rc != 0  # a constant scorer cannot catch column0_bot
+    assert "pass^2" in out

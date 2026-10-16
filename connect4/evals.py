@@ -39,7 +39,7 @@ def make_task(name: str, bot):
 
 
 def run_suite(bot, scorers: list[Scorer], *, games: int, puzzles_n: int,
-              seed: int, trials: int, send: bool) -> list[tuple[str, Any]]:
+              seed: int, trials: int, send: bool) -> tuple[dict[str, Any], list[tuple[str, Any]]]:
     """Run one suite (all datasets, all scorers) via Braintrust Eval()."""
     from braintrust import Eval
     from braintrust.framework import ReporterDef
@@ -48,7 +48,7 @@ def run_suite(bot, scorers: list[Scorer], *, games: int, puzzles_n: int,
     quiet = ReporterDef(name="quiet", report_eval=lambda evaluator, result, verbose, jsonl: result,
                         report_run=lambda results, verbose, jsonl: True)
     score_fns = [wrapped(s.fn) for s in scorers]
-    return [
+    suite = [
         (name, Eval(
             name=f"connect4-{name}",
             data=dataset_rows(name, puzzles_n=puzzles_n, games=games, seed=seed),
@@ -60,6 +60,7 @@ def run_suite(bot, scorers: list[Scorer], *, games: int, puzzles_n: int,
         ))
         for name in DATASETS
     ]
+    return {fn.__name__: fn for fn in score_fns}, suite
 
 
 def _score_value(result, scorer_name: str) -> float | None:
@@ -71,10 +72,11 @@ def _score_value(result, scorer_name: str) -> float | None:
     return None
 
 
-def _aggregate(suite: list[tuple[str, Any]], scorers: list[Scorer],
-               trials: int) -> dict[str, dict]:
+def _aggregate(wrapped_fns: dict[str, Any], suite: list[tuple[str, Any]],
+               scorers: list[Scorer], trials: int) -> dict[str, dict]:
     """Fold Eval() outputs into per-scorer means, error counts, and pass^k."""
-    agg = {s.name: {"values": [], "errors": 0, "pass_k": None} for s in scorers}
+    agg = {s.name: {"values": [], "errors": 0, "pass_k": None,
+                    "first_error": None} for s in scorers}
     for _, ev in suite:
         for result in ev.results:
             for scorer in scorers:
@@ -84,15 +86,16 @@ def _aggregate(suite: list[tuple[str, Any]], scorers: list[Scorer],
                     continue
                 if math.isnan(value):
                     entry["errors"] += 1
+                    if entry["first_error"] is None:
+                        entry["first_error"] = getattr(
+                            wrapped_fns[scorer.name], "first_error", None)
                 else:
                     entry["values"].append(value)
     if trials > 1:
-        # pass^k: a puzzle passed k-of-k only if every trial scored it a hit.
+        # pass^k: a case passed k-of-k only if every trial scored it a hit.
         for scorer in scorers:
             hits = total = 0
-            for name, ev in suite:
-                if name not in PUZZLE_DATASETS:
-                    continue
+            for _, ev in suite:
                 by_case: dict[str, list[float]] = {}
                 for result in ev.results:
                     value = _score_value(result, scorer.name)
@@ -126,7 +129,8 @@ def build_rows(agg: dict[str, dict], gates: dict[str, Gate]) -> list[tuple[str, 
     rows = []
     for name, entry in agg.items():
         if entry["errors"]:
-            rows.append((name, "RED", f"error on {entry['errors']} row(s)"))
+            why = f": {entry['first_error']}" if entry["first_error"] else ""
+            rows.append((name, "RED", f"error on {entry['errors']} row(s){why}"))
             continue
         values = entry["values"]
         gate = gates.get(name)
@@ -173,21 +177,32 @@ def main(argv: list[str] | None = None) -> int:
     common = dict(games=args.games, puzzles_n=args.puzzles, seed=args.seed,
                   trials=args.trials, send=send)
 
-    agg = _aggregate(run_suite(bot, scorers, **common), scorers, args.trials)
+    agg = _aggregate(*run_suite(bot, scorers, **common), scorers, args.trials)
     ok = print_scoreboard(f"eval: {args.bot}", build_rows(agg, gates))
 
     # Negative control: the same scorers+gates must fail column0_bot somewhere.
-    ctrl_agg = _aggregate(run_suite(column0_bot.choose, scorers, **common),
-                          scorers, args.trials)
+    ctrl_w, ctrl_suite = run_suite(column0_bot.choose, scorers, **common)
+    ctrl_agg = _aggregate(ctrl_w, ctrl_suite, scorers, args.trials)
     ctrl_rows = build_rows(ctrl_agg, gates)
-    live = any(verdict == "RED" for _, verdict, _ in ctrl_rows)
+    # A scorer that errored is broken, not a gate that caught column0_bot.
+    error_rows = []
+    live = False
+    for name, verdict, _ in ctrl_rows:
+        if ctrl_agg[name]["errors"]:
+            e = ctrl_agg[name]
+            why = f": {e['first_error']}" if e["first_error"] else ""
+            error_rows.append((f"column0: {name}", "RED",
+                               f"scorer errored on column0_bot ({e['errors']} row(s)){why}"))
+        elif verdict == "RED":
+            live = True
     # Red on column0 means the suite is live, so its rows are diagnostics.
     print_scoreboard("negative control: column0_bot", [
         ("negative control", "GREEN", "column0_bot fails your gates") if live
         else ("negative control", "RED", "your suite passes column0_bot"),
+        *error_rows,
         *((f"column0: {n}", "info", d) for n, _, d in ctrl_rows),
     ])
-    ok = ok and live
+    ok = ok and live and not error_rows
 
     print(f"\n{GREEN if ok else RED}{'GREEN' if ok else 'RED'}{RESET}\n")
     return 0 if ok else 1
