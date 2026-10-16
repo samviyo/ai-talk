@@ -39,7 +39,8 @@ fi
 if [ -n "$command" ]; then
   # Writing or deleting under team_evals/ via shell is also blocked; reads pass.
   if printf '%s' "$command" | grep -qE '(^|[>|&;[:space:]])(rm|mv|cp|chmod|chown|tee|sed|dd|install|touch|mkdir|rmdir|ln)[[:space:]].*connect4/team_evals/' \
-     || printf '%s' "$command" | grep -qE '>+[[:space:]]*[^[:space:]]*connect4/team_evals/'; then
+     || printf '%s' "$command" | grep -qE '>+[[:space:]]*[^[:space:]]*connect4/team_evals/' \
+     || printf '%s' "$command" | grep -qE 'unlock-c4|team_evals/\.locked|(^|[[:space:];&|])cd[[:space:]]+[^;&|]*team_evals'; then
     blocked
   fi
 fi
