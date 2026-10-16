@@ -54,6 +54,15 @@ def main() -> None:
         )
         sys.exit(1)
 
+    if not any(gates.get(name) for name, _ in scorers):
+        harness.print_scoreboard(
+            [harness.Row("no gates yet", False,
+                         "no gates yet: add [score_name] min = ... to evals/gates.toml",
+                         True)],
+            "Scoreboard",
+        )
+        sys.exit(1)
+
     data = game_views(args.runs, seat=args.seat, team=args.team, latest=args.latest)
     if not data:
         print(f"no transcripts with scoreable seats under {args.runs}")
