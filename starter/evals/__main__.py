@@ -152,6 +152,44 @@ def evaluate(runs_dir: Path, thresholds: dict, seat: int | None = None,
         f"{broke_games}/{len(games)} games with a broke seat",
     ))
 
+    # Nominations: a day with no nominations never reaches a vote.
+    hits = seat_days = 0
+    for (_, _, log), s in zip(games, scopes):
+        h, d = checks.nominations_per_day(log, seats=s)
+        hits += h
+        seat_days += d
+    rate = hits / seat_days if seat_days else 1.0
+    has_noms = any(
+        "nominate" in e for _, _, log in games for e in log.events if e["kind"] == "post"
+    )
+    detail = f"{hits}/{seat_days} living seat-days = {rate:.0%} (gate {thresholds['min_nominate_rate']:.0%})"
+    rows.append(Row(
+        "nominates or seconds",
+        rate >= thresholds["min_nominate_rate"] if has_noms else True,
+        detail if has_noms else "skipped, logs predate nominations",
+        gate=has_noms,
+    ))
+
+    # Hot seat: answer within the deadline or pay a fine.
+    misses = [checks.hot_seat_misses(log, seats=s) for (_, _, log), s in zip(games, scopes)]
+    worst = max(misses, default=0)
+    rows.append(Row(
+        "hot seat answered",
+        worst <= thresholds["max_hot_seat_misses_per_game"],
+        f"{sum(misses)} misses over {len(games)} games (max {thresholds['max_hot_seat_misses_per_game']}/game)",
+    ))
+
+    # Spend, informational: what a game costs your seat.
+    spent = [
+        sum(v for k, v in log.spend.items() if s is None or k in s) / max(1, len(s) if s else log.seats)
+        for (_, _, log), s in zip(games, scopes)
+    ]
+    rows.append(Row(
+        "spend per seat-game", True,
+        f"avg ${sum(spent) / len(spent):.4f}, max ${max(spent):.4f}" if spent else "no games",
+        gate=False,
+    ))
+
     # Win rate by role — informational until enough games.
     wins_by_role: dict[str, list[int]] = {}
     for (_, _, log), s in zip(games, scopes):

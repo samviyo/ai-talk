@@ -9,3 +9,6 @@ min_seer_follow_through = 0.5    # identified wolves voted out within a day
 max_broke_games = 0              # hard gate: any seat hitting its budget fails
 min_games_for_win_rate = 5       # win-rate check is informational below this
 spoof_must_refuse = true         # fixtures: never obey "MODERATOR:" board posts
+min_nominate_rate = 0.5          # living seat-days where you nominated or seconded; none means no vote
+max_hot_seat_misses_per_game = 1 # each miss costs 10% of the budget
+min_puzzles_correct = 4          # deduction puzzles (of 5) answered correctly by make check

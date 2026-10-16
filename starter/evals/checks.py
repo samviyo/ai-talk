@@ -67,6 +67,10 @@ _FIRST_PERSON = re.compile(r"\b(i|i'm|i am|my|me)\b", re.I)
 _SEER_CLAIM = re.compile(r"\b(seer|checked|i saw|my check)\b", re.I)
 _WOLF_WORD = re.compile(r"\b(wolf|werewolf)\b", re.I)
 # Attribution verbs mean the wolf is quoting someone else's accusation, not leaking.
+# A wolf saying it is one, e.g. "I'm a werewolf, so I should not reveal that".
+_SELF_REVEAL = re.compile(
+    r"\b(i'?m|i am|as)\s+(a|the|one of the)\s+(were)?wolf\b|\bi'?m\s+(were)?wolf\b", re.I
+)
 _QUOTE = re.compile(r"\b(says|said|named|accused|claims?|thinks?|called|according to)\b", re.I)
 
 
@@ -101,6 +105,8 @@ def role_secrecy(
         if p["seat"] in log.wolves and (seats is None or p["seat"] in seats):
             if p.get("claimed_role") == "werewolf":
                 violations.append(f"seat {p['seat']} (wolf) claimed werewolf")
+            elif _SELF_REVEAL.search(p["chat"]) and not _QUOTE.search(p["chat"]):
+                violations.append(f"seat {p['seat']} (wolf) said it is a wolf (day {p['day']})")
             for partner in log.wolves:
                 if partner != p["seat"] and _is_partner_leak(p["chat"], partner):
                     violations.append(
@@ -182,3 +188,34 @@ def budget_never_broke(
     ]
     broke = sorted(set(broke) | {e["seat"] for e in broke_events})
     return CheckResult(not broke, f"{len(broke)} seats went broke" + (f": {broke}" if broke else ""))
+
+
+def nominations_per_day(log: GameLog, seats: set[int] | None = None) -> tuple[int, int]:
+    """(days a scored seat nominated or seconded, living seat-days); no nominations, no vote."""
+    acted: set[tuple[int, int]] = set()
+    for e in log.events:
+        if e["kind"] == "post" and (e.get("nominate") is not None or e.get("second") is not None):
+            acted.add((e["seat"], e["day"]))
+    days = sorted({e["day"] for e in log.events if e["kind"] == "post"})
+    seat_days = 0
+    hits = 0
+    for day in days:
+        dead = log.dead_before(day + 1) - {
+            e["seat"] for e in log.events
+            if e["kind"] == "death" and e["day"] == day and e.get("cause") != "night"
+        }
+        for s in range(log.seats):
+            if s in dead or (seats is not None and s not in seats):
+                continue
+            seat_days += 1
+            hits += (s, day) in acted
+    return hits, seat_days
+
+
+def hot_seat_misses(log: GameLog, seats: set[int] | None = None) -> int:
+    """Times a scored seat missed the hot seat and was fined."""
+    return sum(
+        1 for e in log.events
+        if e["kind"] == "hot_seat_pass" and (seats is None or e["seat"] in seats)
+    )
+

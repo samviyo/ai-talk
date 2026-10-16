@@ -101,6 +101,32 @@ def test_secrecy_catches_wolf_claiming_werewolf():
     assert not checks.role_secrecy(log, 0).ok
 
 
+@pytest.mark.parametrize("text", ["I'm a werewolf, deal with it.", "As a wolf I say lynch 3."])
+def test_secrecy_flags_wolf_self_reveal(text):
+    assert not checks.role_secrecy(_wolf_log(text), 0).ok
+
+
+@pytest.mark.parametrize("text", ["I'm not a wolf.", "Seat 2 said 'I am a wolf' as a joke."])
+def test_secrecy_ignores_denials_and_quotes(text):
+    assert checks.role_secrecy(_wolf_log(text), 0).ok
+
+
+def test_hot_seat_misses_scoped_to_seat():
+    log = _wolf_log("hello")
+    log.events.append({"kind": "hot_seat_pass", "seat": 3, "day": 1})
+    assert checks.hot_seat_misses(log) == 1
+    assert checks.hot_seat_misses(log, seats={0}) == 0
+
+
+def test_offline_gate_fake_decider_is_red():
+    proc = subprocess.run(
+        [sys.executable, "-m", "evals.offline", "--fake"],
+        cwd=STARTER, capture_output=True, text=True,
+    )
+    assert "deduction puzzles" in proc.stdout and "RED" in proc.stdout
+    assert proc.returncode != 0
+
+
 def test_consistency_catches_changed_claim():
     _, log = load_game(FIXTURES / "table1" / "game2")
     log.events.append({

@@ -35,6 +35,13 @@ async def _call(session: ClientSession, tool: str, args: dict) -> dict | str:
         return text
 
 
+QUEUED_BACKOFF_S = 6.0  # roughly one floor slot; re-posting sooner is refused anyway
+
+
+def _queued(out: dict | str) -> bool:
+    return isinstance(out, dict) and out.get("error") == "still_queued"
+
+
 async def _maybe_buy_vote(session: ClientSession, turn: dict) -> None:
     """Example purchase rule: buy a double vote once if we can afford it."""
     shop = await _call(session, "shop", {})
@@ -57,6 +64,7 @@ async def _discuss(session: ClientSession, llm, config: BotConfig,
     reserve = 1
     news_cursor: int | None = None  # event cursor for wait_for_turn(since=...)
     alive = list(turn.get("alive") or [])
+    queued_until = 0.0  # a still_queued post holds the floor; resending burns the call budget
     while True:
         left = deadline_s - (asyncio.get_event_loop().time() - started)
         if left <= 1.0 or llm.broke:
@@ -72,6 +80,8 @@ async def _discuss(session: ClientSession, llm, config: BotConfig,
         mentions = turn.get("mentions") or []
         want = None
         owe = turn.get("you_owe")
+        if asyncio.get_event_loop().time() < queued_until:
+            owe = "wait"  # our last post is still queued for the floor
         if owe == "reply":
             # A granted reply is free: it doesn't spend a post.
             prompt = (
@@ -88,7 +98,8 @@ async def _discuss(session: ClientSession, llm, config: BotConfig,
             args: dict = {"turn_id": turn_id, "chat": chat}
             if turn.get("reply_to") is not None:
                 args["reply_to"] = turn["reply_to"]
-            await _call(session, "post", args)
+            if _queued(await _call(session, "post", args)):
+                queued_until = asyncio.get_event_loop().time() + QUEUED_BACKOFF_S
         elif owe == "hot_seat":
             # 5s speed test: no reasoning, a handful of tokens.
             prompt = (
@@ -101,7 +112,10 @@ async def _discuss(session: ClientSession, llm, config: BotConfig,
             if llm.broke:
                 return None
             chat = reply[:280] or "No comment."
-            await _call(session, "post", {"turn_id": turn_id, "chat": chat})
+            if _queued(await _call(session, "post", {"turn_id": turn_id, "chat": chat})):
+                queued_until = asyncio.get_event_loop().time() + QUEUED_BACKOFF_S
+        elif owe == "wait":
+            pass
         else:
             if not opened and posts_left > reserve:
                 want = "opener"
@@ -134,6 +148,8 @@ async def _discuss(session: ClientSession, llm, config: BotConfig,
                 out = await _call(session, "post", post_args)
                 if isinstance(out, dict) and not out.get("error"):
                     opened = True
+                elif _queued(out):
+                    queued_until = asyncio.get_event_loop().time() + QUEUED_BACKOFF_S
         args = {"timeout_s": 3}
         if news_cursor is not None:
             args["since"] = news_cursor

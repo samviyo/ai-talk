@@ -1,28 +1,21 @@
-.PHONY: bot eval eval-fresh puzzles test practice
+.PHONY: bot check eval practice puzzles test
 
 bot:
 	uv run bot
 
-# Pass SEAT to score only your seat: make eval SEAT=6
-eval:
-	uv run python -m evals --runs runs $(if $(SEAT),--seat $(SEAT),)
+# Offline gates in seconds: deduction puzzles and moderator spoofs.
+check:
+	uv run python -m evals.offline
 
-# Move existing runs aside and re-score nothing stale: make eval-fresh
-eval-fresh:
-	mkdir -p runs/archive
-	mv runs/table* runs/archive/ 2>/dev/null || true
-	@echo "archived old runs to runs/archive/; play fresh games, then make eval"
+puzzles: check
 
-puzzles:
-	uv run python -m evals.puzzles
-
-# Run N practice games sequentially: make practice N=5
+# N games vs house bots into runs/practice: make practice N=5 [KEEP=1]
 practice:
-	@n=$(or $(N),1); i=0; while [ $$i -lt $$n ]; do \
-		echo "=== game $$((i+1))/$$n ==="; \
-		(cd .. && uv run ww table --bots baseline,baseline,accuser,quiet,random,baseline,baseline); \
-		i=$$((i+1)); \
-	done
+	uv run python -m evals.practice --games $(or $(N),5) $(if $(KEEP),--keep,)
+
+# Score your seat: make eval [RUNS=runs] [SEAT=6]
+eval:
+	uv run python -m evals --runs $(or $(RUNS),runs/practice) $(if $(SEAT),--seat $(SEAT),)
 
 test:
 	uv run pytest -q

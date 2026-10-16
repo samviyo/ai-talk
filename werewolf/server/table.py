@@ -1008,7 +1008,8 @@ class Table:
                         "msg": e.data["msg"],
                     }
                 )
-            elif e.kind in ("nomination", "seconded", "standing", "vote_skipped"):
+            elif e.kind in ("nomination", "seconded", "standing", "vote_skipped",
+                            "hot_seat_pass", "cut_off"):
                 out.append({"kind": e.kind, "day": e.day, **e.data})
             elif e.kind == "powerup":
                 out.append(
