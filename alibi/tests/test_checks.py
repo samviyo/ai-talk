@@ -10,26 +10,23 @@ import pytest
 from alibi import checks
 from alibi.scorers import Gate, Scorer, load_gates, load_scorers
 
-TEAM_EVALS = Path(checks.__file__).parent / "team_evals"
-SCORER_FILE = TEAM_EVALS / "workshop_scorers.py"
-GATES_FILE = TEAM_EVALS / "gates.toml"
-ORIG_GATES = GATES_FILE.read_text()
-
 
 @pytest.fixture
-def team_scorers():
-    yield
-    SCORER_FILE.unlink(missing_ok=True)
-    GATES_FILE.write_text(ORIG_GATES)
+def team_scorers(tmp_path, monkeypatch):
+    """Throwaway team-evals dir via the env override; the real kit is never touched."""
+    team_dir = tmp_path / "team_evals"
+    team_dir.mkdir()
+    monkeypatch.setenv("ALIBI_TEAM_EVALS_DIR", str(team_dir))
+    yield team_dir
     for m in list(sys.modules):
         if m.startswith("alibi_team_scorers_"):
             del sys.modules[m]
 
 
-def _install_scorers(code: str, gates: str | None = None) -> None:
-    SCORER_FILE.write_text(code)
+def _install_scorers(team_dir: Path, code: str, gates: str | None = None) -> None:
+    (team_dir / "workshop_scorers.py").write_text(code)
     if gates is not None:
-        GATES_FILE.write_text(gates)
+        (team_dir / "gates.toml").write_text(gates)
 
 
 INPUT = {
@@ -90,7 +87,7 @@ GOOD_GATES = "[score_verdicts]\nmin = 1.0\n\n[score_receipts]\nmin = 1.0\n"
 
 
 def test_good_scorers_pass_all_rows(team_scorers):
-    _install_scorers(GOOD_SCORERS, GOOD_GATES)
+    _install_scorers(team_scorers, GOOD_SCORERS, GOOD_GATES)
     scorers = load_scorers()
     gates = load_gates()
     assert {s.name for s in scorers} == {"score_verdicts", "score_receipts"}
@@ -100,6 +97,7 @@ def test_good_scorers_pass_all_rows(team_scorers):
 
 def test_gated_scorer_failing_a_correct_row_is_reported(team_scorers):
     _install_scorers(
+        team_scorers,
         "def score_bad(input, output, expected=None, **kw):\n"
         "    return 0.0\n",
         "[score_bad]\nmin = 1.0\n")
@@ -110,6 +108,7 @@ def test_gated_scorer_failing_a_correct_row_is_reported(team_scorers):
 def test_wrong_row_caught_by_no_scorer_is_reported(team_scorers):
     # An always-True scorer misses every wrong row; the constant flag fires too.
     _install_scorers(
+        team_scorers,
         "def score_true(input, output, expected=None, **kw):\n"
         "    return True\n",
         "[score_true]\nmin = 1.0\n")
@@ -120,6 +119,7 @@ def test_wrong_row_caught_by_no_scorer_is_reported(team_scorers):
 
 def test_always_false_scorer_is_flagged_constant(team_scorers):
     _install_scorers(
+        team_scorers,
         "def score_false(input, output, expected=None, **kw):\n"
         "    return 0.0\n",
         "[score_false]\nmin = 0.5\n")
@@ -130,6 +130,7 @@ def test_always_false_scorer_is_flagged_constant(team_scorers):
 
 def test_raising_scorer_fails_its_rows(team_scorers):
     _install_scorers(
+        team_scorers,
         "def score_boom(input, output, expected=None, **kw):\n"
         "    raise RuntimeError('boom')\n",
         "[score_boom]\nmin = 0.5\n")
@@ -138,7 +139,7 @@ def test_raising_scorer_fails_its_rows(team_scorers):
 
 
 def test_no_gates_is_red_failure(team_scorers):
-    _install_scorers(GOOD_SCORERS, "# no gates\n")
+    _install_scorers(team_scorers, GOOD_SCORERS, "# no gates\n")
     failures = checks.run_checks(load_scorers(), {}, ROWS, print_rows=False)
     assert failures == ["no gates yet"]
 
@@ -146,6 +147,7 @@ def test_no_gates_is_red_failure(team_scorers):
 def test_none_counts_as_pass_on_positive_rows(team_scorers):
     # Applicability: returns None everywhere; positive rows pass, wrong rows miss.
     _install_scorers(
+        team_scorers,
         "def score_na(input, output, expected=None, **kw):\n"
         "    return None\n",
         "[score_na]\nmin = 1.0\n")
@@ -157,7 +159,7 @@ def test_none_counts_as_pass_on_positive_rows(team_scorers):
 def test_main_exits_nonzero_on_break(tmp_path, capsys, team_scorers):
     path = tmp_path / "scorer_checks.jsonl"
     path.write_text("\n".join(json.dumps(r) for r in ROWS) + "\n")
-    _install_scorers(GOOD_SCORERS, GOOD_GATES)
+    _install_scorers(team_scorers, GOOD_SCORERS, GOOD_GATES)
     rc = checks.main(["--checks", str(path)])
     out = capsys.readouterr().out
     assert rc == 0, out
@@ -168,7 +170,7 @@ def test_main_exits_nonzero_on_break(tmp_path, capsys, team_scorers):
 def test_main_prints_per_row_lines_and_scorer_verdicts(tmp_path, capsys, team_scorers):
     path = tmp_path / "scorer_checks.jsonl"
     path.write_text("\n".join(json.dumps(r) for r in ROWS) + "\n")
-    _install_scorers(GOOD_SCORERS, GOOD_GATES)
+    _install_scorers(team_scorers, GOOD_SCORERS, GOOD_GATES)
     checks.main(["--checks", str(path)])
     out = capsys.readouterr().out
     assert "score_verdicts=" in out

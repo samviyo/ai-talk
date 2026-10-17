@@ -58,9 +58,13 @@ def run_suite(bot, scorers: list[Scorer], rows: list[dict[str, Any]],
     quiet = ReporterDef(name="quiet", report_eval=lambda evaluator, result, verbose, jsonl: result,
                         report_run=lambda results, verbose, jsonl: True)
     score_fns = [wrapped(s.fn) for s in scorers]
+    # Datum metadata is the only per-row identity that comes back on results.
+    data = [{"input": r["input"], "expected": r.get("expected"),
+             "metadata": {"id": r.get("id") or f"row-{i}"}}
+            for i, r in enumerate(rows)]
     ev = Eval(
         name=f"alibi-{split}",
-        data=[{"input": r["input"], "expected": r.get("expected")} for r in rows],
+        data=data,
         task=lambda input: bot(input),
         scores=score_fns,
         trial_count=trials,
@@ -80,35 +84,72 @@ def _score_value(result, scorer_name: str) -> float | None:
     return None
 
 
+def _result_scorer_errors(result) -> dict[str, Any]:
+    """Scorers Braintrust itself failed to run (in result.metadata.scorer_errors)."""
+    meta = getattr(result, "metadata", None) or {}
+    errs = meta.get("scorer_errors") if isinstance(meta, dict) else None
+    return errs if isinstance(errs, dict) else {}
+
+
+def _first_error_text(wrapped_fns: dict[str, Any], scorer_name: str,
+                      sdk_error: Any = None) -> str | None:
+    local = getattr(wrapped_fns.get(scorer_name), "first_error", None)
+    if local:
+        return local
+    if sdk_error:
+        text = str(sdk_error).strip().splitlines()
+        if text:
+            return text[-1].strip()
+    return None
+
+
+def _row_key(result, index: int) -> str:
+    meta = getattr(result, "metadata", None) or {}
+    rid = meta.get("id") if isinstance(meta, dict) else None
+    return str(rid) if rid is not None else f"row-{index}"
+
+
 def _aggregate(wrapped_fns: dict[str, Any], ev, scorers: list[Scorer],
                trials: int) -> dict[str, dict]:
     """Fold Eval() output into per-scorer means, error counts, and pass^k."""
     agg = {s.name: {"values": [], "errors": 0, "pass_k": None,
                     "first_error": None} for s in scorers}
-    for result in ev.results:
+    by_case: dict[str, dict[str, list[float]]] = {s.name: {} for s in scorers}
+    for index, result in enumerate(ev.results):
+        task_error = getattr(result, "error", None)
+        sdk_errors = _result_scorer_errors(result)
+        key = _row_key(result, index)
         for scorer in scorers:
-            value = _score_value(result, scorer.name)
             entry = agg[scorer.name]
+            if task_error is not None:
+                # A bot that dies on a row must count against every scorer.
+                entry["errors"] += 1
+                if entry["first_error"] is None:
+                    entry["first_error"] = (f"bot error {type(task_error).__name__}: "
+                                            f"{task_error}")
+                continue
+            value = _score_value(result, scorer.name)
+            if scorer.name in sdk_errors:
+                # The SDK failed this scorer and recorded no score.
+                entry["errors"] += 1
+                if entry["first_error"] is None:
+                    entry["first_error"] = _first_error_text(
+                        wrapped_fns, scorer.name, sdk_errors[scorer.name])
+                continue
             if value is None:
                 continue
             if math.isnan(value):
                 entry["errors"] += 1
                 if entry["first_error"] is None:
-                    entry["first_error"] = getattr(
-                        wrapped_fns[scorer.name], "first_error", None)
+                    entry["first_error"] = _first_error_text(wrapped_fns, scorer.name)
             else:
                 entry["values"].append(value)
+                by_case[scorer.name].setdefault(key, []).append(value)
     if trials > 1:
         # pass^k: a row passed k-of-k only if every trial scored it a hit.
         for scorer in scorers:
             hits = total = 0
-            by_case: dict[str, list[float]] = {}
-            for result in ev.results:
-                value = _score_value(result, scorer.name)
-                if value is None or math.isnan(value):
-                    continue
-                by_case.setdefault(repr(result.input), []).append(value)
-            for vals in by_case.values():
+            for vals in by_case[scorer.name].values():
                 if len(vals) >= trials:
                     total += 1
                     if all(v >= 1.0 for v in vals):
