@@ -39,7 +39,9 @@ own assertion, never proof.
 
 1. Write your scorers here.
 2. Gate them in `gates.toml`.
-3. `make check-alibi` — the labelled scorer-check rows must all pass.
+3. `make check-alibi` — the labelled scorer-check rows must all pass. The rows
+   are labelled correct / equivalent / wrong with no explanation; working out
+   what a wrong row got wrong is part of the exercise.
 4. `make eval-alibi` — your gates go green and the `all_achieved` negative
    control goes red.
 5. `make lock-alibi` and hand off; the organiser reveals `make reveal-alibi`.

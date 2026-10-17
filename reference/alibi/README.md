@@ -11,6 +11,9 @@ ALIBI_TEAM_EVALS_DIR=reference/alibi uv run python -m alibi.evals --bot alibi.bo
 
 Tests: `uv run pytest reference/alibi -q`.
 
+Organiser-only: `scorer_check_notes.jsonl` here holds the per-row rationale for
+`alibi/datasets/scorer_checks.jsonl`; teams never see it.
+
 ## Held-out reveal
 
 Held-out rows are never committed: they are generated in memory from the seed

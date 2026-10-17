@@ -48,7 +48,7 @@ def run_checks(scorers: list[Scorer], gates: dict[str, Gate],
         for s in gated}
 
     for row in rows:
-        rid, label, why = row["id"], row.get("label"), row.get("why", "")
+        rid, label = row["id"], row.get("label")
         row_ok = True
         mentions: list[str] = []
         for s in gated:
@@ -86,9 +86,15 @@ def run_checks(scorers: list[Scorer], gates: dict[str, Gate],
         if print_rows:
             color = GREEN if row_ok else RED
             verdict = "GREEN" if row_ok else "RED  "
-            print(f"  {color}{verdict}{RESET} {rid:<12} {str(label):<11} {why}")
+            print(f"  {color}{verdict}{RESET} {rid:<12} {str(label):<11}")
             for m in mentions:
                 print(f"       {m}")
+            if not row_ok and label == "wrong" and caught == []:
+                print("       diff this output against expected: whatever differs "
+                      "is a failure your gates don't measure")
+            elif not row_ok and label in ("correct", "equivalent"):
+                print("       this output should pass: diff it against expected "
+                      "and decide whether the difference matters")
 
     # A gated scorer constant across all rows cannot discriminate.
     for s in gated:

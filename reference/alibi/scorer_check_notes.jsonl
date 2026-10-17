@@ -1,0 +1,12 @@
+{"id": "sc-001", "why": "matches expected exactly"}
+{"id": "sc-002", "why": "unknown claim cites the say; unknown receipts are not scored"}
+{"id": "sc-003", "why": "duplicate receipt entry; set equality must pass"}
+{"id": "sc-004", "why": "unknown claim's receipts key omitted vs empty list"}
+{"id": "sc-005", "why": "label case/whitespace differs; normalisation must pass"}
+{"id": "sc-006", "why": "trusts the agent's say; a say is never proof"}
+{"id": "sc-007", "why": "cites the call receipt; only a result proves anything"}
+{"id": "sc-008", "why": "cites an untrusted message as proof of success"}
+{"id": "sc-009", "why": "cites the failed attempt and the retry; the error is not proof"}
+{"id": "sc-010", "why": "blanket not_achieved ignores real successes"}
+{"id": "sc-011", "why": "verdict matches but the receipt proves a different claim"}
+{"id": "sc-012", "why": "malformed output; harness passes it through unchanged"}
