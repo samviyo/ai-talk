@@ -6,3 +6,4 @@ runs/
 .claude/worktrees/
 .serena/
 .playwright-mcp/
+alibi/datasets/heldout.jsonl

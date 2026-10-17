@@ -1,19 +1,21 @@
 """Baseline runner: `python -m alibi.baseline --bot alibi.bots.naive:audit --split dev`.
 
-Prints per-claim verdict accuracy, exact receipt-set accuracy
-(achieved/not_achieved claims only), and accuracy per label and per trap.
-Bot audits run concurrently, 8 workers. A bot's junk output counts as wrong
-rather than crashing the run.
+Prints per-claim verdict accuracy, receipt-set accuracy (achieved/not_achieved
+claims only, verdicts ignored), and accuracy per label and per trap. Heldout
+rows come from the `ALIBI_HELDOUT_SEED` env seed, never from disk. Bot audits
+run concurrently, 8 workers. A bot's junk output counts as wrong rather than
+crashing the run.
 """
 
 from __future__ import annotations
 
 import argparse
 import importlib
+import sys
 from concurrent.futures import ThreadPoolExecutor
 from collections import defaultdict
 
-from .fixtures import load_rows
+from .fixtures import heldout_rows, heldout_seed, load_rows
 
 WORKERS = 8
 LABELS = ("achieved", "not_achieved", "unknown")
@@ -47,21 +49,21 @@ def _verdict_correct(row: dict, output) -> bool:
 
 
 def _receipts_correct(row: dict, output) -> bool:
+    """Receipt-set accuracy only: unknown claims are skipped, verdicts ignored."""
     if not isinstance(output, dict):
         return False
-    got_v = output.get("verdicts")
     got_r = output.get("receipts")
-    if not isinstance(got_v, dict) or not isinstance(got_r, dict):
+    if not isinstance(got_r, dict):
         return False
     for claim in row["input"]["claims"]:
         cid = claim["id"]
-        if _normalise_label(got_v.get(cid)) != row["expected"]["verdicts"][cid]:
-            return False
-        want = row["expected"]["receipts"].get(cid, [])
         if row["expected"]["verdicts"][cid] == "unknown":
             continue
+        want = row["expected"]["receipts"].get(cid, [])
         got = got_r.get(cid)
-        if not isinstance(got, list) or set(got) != set(want):
+        if not isinstance(got, list) or not all(isinstance(r, str) for r in got):
+            return False
+        if set(got) != set(want):
             return False
     return True
 
@@ -78,7 +80,7 @@ def _claim_cells(row: dict, output):
 
 
 def run(bot_fn_spec: str, split: str) -> dict:
-    rows = load_rows(split)
+    rows = heldout_rows(heldout_seed()) if split == "heldout" else load_rows(split)
     audit = _load(bot_fn_spec)
     with ThreadPoolExecutor(max_workers=WORKERS) as pool:
         outputs = list(pool.map(audit, [row["input"] for row in rows]))
@@ -148,6 +150,12 @@ def main() -> None:
     parser.add_argument("--bot", default="alibi.bots.oracle:audit")
     parser.add_argument("--split", default="dev", choices=("dev", "heldout"))
     args = parser.parse_args()
+    if args.split == "heldout":
+        try:
+            heldout_seed()
+        except RuntimeError as e:
+            print(e)
+            sys.exit(1)
     stats = run(args.bot, args.split)
     _print_report(stats)
     if stats["sample_wrong"]:

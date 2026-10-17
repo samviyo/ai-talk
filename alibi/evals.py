@@ -15,6 +15,7 @@ import sys
 from pathlib import Path
 from typing import Any, Callable
 
+from .fixtures import heldout_rows, heldout_seed
 from .scorers import Gate, Scorer, load_gates, load_scorers, wrapped
 
 GREEN, RED, RESET = "\033[32m", "\033[31m", "\033[0m"
@@ -38,9 +39,12 @@ def load_bot(spec: str) -> Callable[..., Any]:
 
 
 def dataset_rows(split: str, limit: int | None = None) -> list[dict[str, Any]]:
-    """Rows from `alibi/datasets/<split>.jsonl`; `limit` keeps the first N."""
-    path = DATASETS_DIR / f"{split}.jsonl"
-    rows = [json.loads(line) for line in path.read_text().splitlines() if line.strip()]
+    """Rows for a split; `limit` keeps the first N. Heldout rows come from the env seed."""
+    if split == "heldout":
+        rows = heldout_rows(heldout_seed())
+    else:
+        path = DATASETS_DIR / f"{split}.jsonl"
+        rows = [json.loads(line) for line in path.read_text().splitlines() if line.strip()]
     return rows[:limit] if limit else rows
 
 
@@ -252,6 +256,10 @@ def main(argv: list[str] | None = None) -> int:
     except FileNotFoundError:
         print(f"{RED}RED{RESET} missing alibi/datasets/{args.split}.jsonl\n")
         return 1
+    except RuntimeError as e:
+        # heldout with no reveal seed: RED, not a traceback
+        print(f"{RED}RED{RESET} {e}\n")
+        return 1
     if not rows:
         print_scoreboard(f"eval: {args.bot}", [
             ("no rows", "RED", f"alibi/datasets/{args.split}.jsonl is empty"),
@@ -264,10 +272,15 @@ def main(argv: list[str] | None = None) -> int:
                                     trials=args.trials, send=send))
 
     if args.heldout:
+        try:
+            heldout = dataset_rows("heldout", args.limit)
+        except RuntimeError as e:
+            print(f"{RED}RED{RESET} {e}\n")
+            return 1
         dev_rows = run_split(bot, scorers, gates, args.split, rows,
                              trials=args.trials, send=send)
         held_rows = run_split(bot, scorers, gates, "heldout",
-                              dataset_rows("heldout", args.limit),
+                              heldout,
                               trials=args.trials, send=send)
         ok = print_scoreboard("reveal: dev vs held-out",
                               _side_by_side(dev_rows, held_rows)) and ok

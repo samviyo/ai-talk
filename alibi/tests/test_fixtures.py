@@ -3,21 +3,24 @@
 from __future__ import annotations
 
 import json
+import sys
 from collections import Counter
+from types import SimpleNamespace
 
 import pytest
 
-from alibi import fixtures
+from alibi import evals, fixtures
 from alibi.baseline import run
 from alibi.bots import all_achieved, all_not_achieved, oracle
 
 LABELS = ("achieved", "not_achieved", "unknown")
 BOUNDS = {"achieved": (0.35, 0.45), "not_achieved": (0.30, 0.40), "unknown": (0.20, 0.30)}
+HELDOUT_SEED = 4242
+REF_DIR = str(fixtures.DATASETS_DIR.parent.parent / "reference" / "alibi")
 
 
-def _reload_rows(split, tmp_path):
-    path = tmp_path / f"{split}.jsonl"
-    return [json.loads(l) for l in path.read_text().splitlines() if l]
+def _split_rows(split):
+    return fixtures.heldout_rows(HELDOUT_SEED) if split == "heldout" else fixtures.load_rows(split)
 
 
 @pytest.fixture(scope="module")
@@ -27,7 +30,7 @@ def regenerated(tmp_path_factory):
     return out
 
 
-@pytest.mark.parametrize("split", fixtures.SPLITS)
+@pytest.mark.parametrize("split", ("dev",))
 def test_regeneration_is_deterministic(tmp_path, split):
     fixtures.regenerate(tmp_path)
     first = (tmp_path / f"{split}.jsonl").read_text()
@@ -39,11 +42,62 @@ def test_regeneration_is_deterministic(tmp_path, split):
     assert first == committed
 
 
+def test_regenerate_writes_no_heldout_file(tmp_path):
+    fixtures.regenerate(tmp_path)
+    assert not (tmp_path / "heldout.jsonl").exists()
+
+
+def test_heldout_rows_are_seed_deterministic_and_vary():
+    first = fixtures.heldout_rows(HELDOUT_SEED)
+    again = fixtures.heldout_rows(HELDOUT_SEED)
+    other = fixtures.heldout_rows(HELDOUT_SEED + 1)
+    assert first == again
+    assert first != other
+    assert len(first) == fixtures.ROWS_PER_SPLIT
+
+
+def test_heldout_rows_use_h_receipt_scheme():
+    for row in fixtures.heldout_rows(HELDOUT_SEED):
+        assert row["metadata"]["split"] == "heldout"
+        for e in row["input"]["transcript"]:
+            assert e["receipt"].startswith("H-"), e["receipt"]
+
+
+def test_heldout_rows_cover_every_kind():
+    for row in fixtures.heldout_rows(HELDOUT_SEED):
+        for claim in row["input"]["claims"]:
+            cid = claim["id"]
+            assert row["expected"]["verdicts"][cid] in LABELS
+            assert row["expected"]["receipts"][cid] == sorted(row["expected"]["receipts"][cid])
+
+
+def test_heldout_seed_env_required(monkeypatch):
+    monkeypatch.delenv(fixtures.HELDOUT_SEED_ENV, raising=False)
+    with pytest.raises(RuntimeError, match=fixtures.HELDOUT_SEED_ENV):
+        fixtures.heldout_seed()
+
+
+def test_heldout_seed_env_reads_integer(monkeypatch):
+    monkeypatch.setenv(fixtures.HELDOUT_SEED_ENV, "7")
+    assert fixtures.heldout_seed() == 7
+
+
 def test_scorer_checks_regenerate_identically(tmp_path):
     fixtures.regenerate(tmp_path)
     assert (tmp_path / "scorer_checks.jsonl").read_text() == (
         fixtures.DATASETS_DIR / "scorer_checks.jsonl"
     ).read_text()
+
+
+def test_equivalent_check_rows_differ_from_expected():
+    checks = [
+        json.loads(l)
+        for l in (fixtures.DATASETS_DIR / "scorer_checks.jsonl").read_text().splitlines()
+        if l
+    ]
+    for c in checks:
+        if c["label"] == "equivalent":
+            assert c["output"] != c["expected"], (c["id"], c["why"])
 
 
 def test_scorer_checks_cover_every_kind():
@@ -66,7 +120,7 @@ def test_scorer_checks_cover_every_kind():
 
 @pytest.mark.parametrize("split", fixtures.SPLITS)
 def test_row_counts_and_shape(regenerated, split):
-    rows = _reload_rows(split, regenerated)
+    rows = _split_rows(split)
     assert len(rows) == fixtures.ROWS_PER_SPLIT
     assert {r["metadata"]["split"] for r in rows} == {split}
     assert len({r["id"] for r in rows}) == len(rows)
@@ -81,7 +135,7 @@ def test_row_counts_and_shape(regenerated, split):
 
 @pytest.mark.parametrize("split", fixtures.SPLITS)
 def test_expected_receipts_exist_and_are_results(regenerated, split):
-    for row in _reload_rows(split, regenerated):
+    for row in _split_rows(split):
         results = {
             e["receipt"]: e for e in row["input"]["transcript"] if e.get("kind") == "result"
         }
@@ -98,7 +152,7 @@ def test_expected_receipts_exist_and_are_results(regenerated, split):
 
 @pytest.mark.parametrize("split", fixtures.SPLITS)
 def test_label_balance_within_bounds(regenerated, split):
-    rows = _reload_rows(split, regenerated)
+    rows = _split_rows(split)
     verdicts = Counter(
         v for row in rows for v in row["expected"]["verdicts"].values()
     )
@@ -110,15 +164,15 @@ def test_label_balance_within_bounds(regenerated, split):
 
 
 def test_heldout_shares_no_receipt_ids_with_dev(regenerated):
-    dev = {e["receipt"] for r in _reload_rows("dev", regenerated) for e in r["input"]["transcript"]}
+    dev = {e["receipt"] for r in fixtures.load_rows("dev") for e in r["input"]["transcript"]}
     held = {
-        e["receipt"] for r in _reload_rows("heldout", regenerated) for e in r["input"]["transcript"]
+        e["receipt"] for r in fixtures.heldout_rows(HELDOUT_SEED) for e in r["input"]["transcript"]
     }
     assert not (dev & held)
 
 
 def test_heldout_reworded_and_reordered():
-    dev, held = fixtures.load_rows("dev"), fixtures.load_rows("heldout")
+    dev, held = fixtures.load_rows("dev"), fixtures.heldout_rows(HELDOUT_SEED)
     dev_claims = {c["text"] for r in dev for c in r["input"]["claims"]}
     held_claims = {c["text"] for r in held for c in r["input"]["claims"]}
     assert not (dev_claims & held_claims)
@@ -131,7 +185,7 @@ def test_trap_coverage(regenerated):
     """The trap mix named in the contract appears across rows on both splits."""
     traps = Counter(
         t for split in fixtures.SPLITS
-        for r in _reload_rows(split, regenerated)
+        for r in _split_rows(split)
         for t in r["metadata"]["traps"]
     )
     for required in (
@@ -151,7 +205,7 @@ def test_trap_coverage(regenerated):
 
 def test_oracle_is_100_on_both_splits(regenerated):
     for split in fixtures.SPLITS:
-        for row in _reload_rows(split, regenerated):
+        for row in _split_rows(split):
             assert oracle.audit(row["input"]) == row["expected"], (split, row["id"])
 
 
@@ -164,7 +218,8 @@ def test_oracle_never_reads_expected():
     assert oracle.audit(bare) == row["expected"]
 
 
-def test_all_achieved_and_all_not_achieved_score_under_50():
+def test_all_achieved_and_all_not_achieved_score_under_50(monkeypatch):
+    monkeypatch.setenv(fixtures.HELDOUT_SEED_ENV, str(HELDOUT_SEED))
     for bot, split in (
         ("alibi.bots.all_achieved:audit", "dev"),
         ("alibi.bots.all_not_achieved:audit", "dev"),
@@ -173,6 +228,32 @@ def test_all_achieved_and_all_not_achieved_score_under_50():
     ):
         stats = run(bot, split)
         assert stats["verdict_accuracy"] < 0.5, (bot, split, stats["verdict_accuracy"])
+
+
+def test_baseline_receipt_accuracy_ignores_verdicts():
+    # wrong unknown-claim verdict must not sink receipt accuracy
+    row = fixtures.load_rows("dev")[0]
+
+    def wrong_unknown_verdict(input):
+        out = oracle.audit(input)
+        for cid, label in out["verdicts"].items():
+            if label == "unknown":
+                out["verdicts"][cid] = "achieved"
+        return out
+
+    from alibi.baseline import _receipts_correct
+
+    assert _receipts_correct(row, wrong_unknown_verdict(row["input"]))
+
+
+def test_baseline_nested_junk_receipts_count_as_wrong():
+    row = fixtures.load_rows("dev")[0]
+    cids = [c["id"] for c in row["input"]["claims"]]
+    out = {"verdicts": row["expected"]["verdicts"],
+           "receipts": {cids[0]: [{}]}}
+    from alibi.baseline import _receipts_correct
+
+    assert _receipts_correct(row, out) is False
 
 
 def test_baseline_runs_bots_concurrently(monkeypatch):
@@ -214,3 +295,50 @@ def test_all_bots_handle_junk_and_missing_claims():
     assert oracle.audit(empty) == {"verdicts": {}, "receipts": {}}
     assert all_achieved.audit(empty) == {"verdicts": {}, "receipts": {}}
     assert all_not_achieved.audit(empty) == {"verdicts": {}, "receipts": {}}
+
+
+@pytest.fixture
+def oracle_bot():
+    sys.modules["stub_bot"] = SimpleNamespace(audit=oracle.audit)
+    yield
+    sys.modules.pop("stub_bot", None)
+
+
+@pytest.mark.usefixtures("oracle_bot")
+def test_split_heldout_without_seed_is_red(capsys, monkeypatch):
+    monkeypatch.delenv(fixtures.HELDOUT_SEED_ENV, raising=False)
+    rc = evals.main(["--bot", "stub_bot:audit", "--split", "heldout",
+                     "--team-evals-dir", REF_DIR])
+    out = capsys.readouterr().out
+    assert rc == 1
+    assert fixtures.HELDOUT_SEED_ENV in out
+
+
+@pytest.mark.usefixtures("oracle_bot")
+def test_split_heldout_with_seed_runs(capsys, monkeypatch):
+    monkeypatch.setenv(fixtures.HELDOUT_SEED_ENV, str(HELDOUT_SEED))
+    rc = evals.main(["--bot", "stub_bot:audit", "--split", "heldout",
+                     "--team-evals-dir", REF_DIR])
+    out = capsys.readouterr().out
+    assert rc == 0, out
+    assert "heldout" in out
+
+
+@pytest.mark.usefixtures("oracle_bot")
+def test_heldout_reveal_without_seed_is_red(capsys, monkeypatch):
+    monkeypatch.delenv(fixtures.HELDOUT_SEED_ENV, raising=False)
+    rc = evals.main(["--bot", "stub_bot:audit", "--split", "dev", "--heldout",
+                     "--team-evals-dir", REF_DIR])
+    out = capsys.readouterr().out
+    assert rc == 1
+    assert fixtures.HELDOUT_SEED_ENV in out
+
+
+@pytest.mark.usefixtures("oracle_bot")
+def test_heldout_reveal_with_seed_runs(capsys, monkeypatch):
+    monkeypatch.setenv(fixtures.HELDOUT_SEED_ENV, str(HELDOUT_SEED))
+    rc = evals.main(["--bot", "stub_bot:audit", "--split", "dev", "--heldout",
+                     "--team-evals-dir", REF_DIR])
+    out = capsys.readouterr().out
+    assert rc == 0, out
+    assert "reveal: dev vs held-out" in out

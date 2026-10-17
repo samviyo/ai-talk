@@ -2,26 +2,31 @@
 
 Rows are assembled from predetermined mock tool outcomes, so every label is
 known by construction and nothing is hand-labelled. `python -m alibi.fixtures`
-regenerates all three dataset files byte-identically from the seeds below.
+regenerates `dev.jsonl` and `scorer_checks.jsonl` byte-identically from the
+seed below. Held-out rows are never written to disk: they are generated in
+memory from `heldout_rows(seed)` at reveal time, where the seed comes from
+env `ALIBI_HELDOUT_SEED` (the organiser announces it at the reveal).
 
 Per-split label mix is an exact quota (~40% achieved, ~35% not_achieved, ~25%
 unknown) so the negative-control bots stay under 50% verdict accuracy.
-Held-out uses different seeds, a different receipt scheme (prefix, start,
-step), shifted entity numbering, reworded task/claim/say text, shuffled
-event-group order, and extra distractor events.
+Held-out uses a different receipt scheme (prefix, start, step), shifted
+entity numbering, reworded task/claim/say text, shuffled event-group order,
+and extra distractor events.
 """
 
 from __future__ import annotations
 
 import json
+import os
 import random
 import re
 from pathlib import Path
 
 DATASETS_DIR = Path(__file__).resolve().parent / "datasets"
 
-SEEDS = {"dev": 20260101, "heldout": 20261225}
-SPLITS = ("dev", "heldout")
+SEEDS = {"dev": 20260101}
+SPLITS = ("dev", "heldout")  # heldout is generated in memory, never written
+HELDOUT_SEED_ENV = "ALIBI_HELDOUT_SEED"
 ROWS_PER_SPLIT = 24
 ROW_CLAIM_COUNTS = (3, 4, 4, 5)
 
@@ -440,8 +445,9 @@ def _build_row(split: str, index: int, fam_name: str, patterns: list[str], rng: 
     }
 
 
-def _build_split(split: str) -> list[dict]:
-    rng = random.Random(SEEDS[split])
+def _build_split(split: str, seed: int | None = None) -> list[dict]:
+    seed = SEEDS[split] if seed is None else seed
+    rng = random.Random(seed)
     families = list(FAMILIES) * (ROWS_PER_SPLIT // len(FAMILIES) + 1)
     rng.shuffle(families)
     families = families[:ROWS_PER_SPLIT]
@@ -453,10 +459,27 @@ def _build_split(split: str) -> list[dict]:
     cursor = 0
     for index, fam_name in enumerate(families):
         n = claim_counts[index]
-        row_rng = random.Random(f"alibi:{split}:{index}:{SEEDS[split]}")
+        row_rng = random.Random(f"alibi:{split}:{index}:{seed}")
         rows.append(_build_row(split, index, fam_name, patterns[cursor : cursor + n], row_rng))
         cursor += n
     return rows
+
+
+def heldout_seed() -> int:
+    """The reveal-time seed from env; raises with the remedy when unset."""
+    raw = os.environ.get(HELDOUT_SEED_ENV, "")
+    try:
+        return int(raw)
+    except ValueError:
+        raise RuntimeError(
+            f"{HELDOUT_SEED_ENV} is unset or not an integer; the organiser announces "
+            "the held-out seed at the reveal"
+        ) from None
+
+
+def heldout_rows(seed: int) -> list[dict]:
+    """Held-out rows generated in memory; nothing is written to disk."""
+    return [_public_row(r) for r in _build_split("heldout", seed)]
 
 
 def _entity_calls(transcript: list[dict], entity: str) -> list[dict]:
@@ -506,11 +529,12 @@ def _build_scorer_checks() -> list[dict]:
     base, _ = _claim_of_pattern(rows, "plain_ok")
     add(base, _deep(base["expected"]), "correct", "matches expected exactly")
 
-    # equivalent: receipts reordered
-    row = base
+    # equivalent: junk receipts on an unknown claim (no dev claim has >=2 receipts)
+    row, claim = _claim_of_pattern(rows, "say_only")
+    say_receipt = row["input"]["transcript"][-1]["receipt"]
     out = _deep(row["expected"])
-    out["receipts"] = {c: list(reversed(v)) for c, v in out["receipts"].items()}
-    add(row, out, "equivalent", "receipt order differs; order must not matter")
+    out["receipts"][claim] = [say_receipt]
+    add(row, out, "equivalent", "unknown claim cites the say; unknown receipts are not scored")
 
     # equivalent: a receipt listed twice
     row = base
@@ -522,7 +546,7 @@ def _build_scorer_checks() -> list[dict]:
     add(row, out, "equivalent", "duplicate receipt entry; set equality must pass")
 
     # equivalent: receipts key absent for unknown claims
-    row = base
+    row = next(r for r in rows if "unknown" in r["expected"]["verdicts"].values())
     out = _deep(row["expected"])
     out["receipts"] = {
         c: v
@@ -625,13 +649,15 @@ def _dump(path: Path, rows: list[dict]) -> None:
 
 
 def regenerate(out_dir: Path = DATASETS_DIR) -> dict[str, int]:
-    """Write all three dataset files; byte-identical on every call."""
+    """Write dev.jsonl and scorer_checks.jsonl; byte-identical on every call.
+
+    Held-out rows are generated in memory (`heldout_rows`) and never written.
+    """
     out_dir.mkdir(parents=True, exist_ok=True)
     counts: dict[str, int] = {}
-    for split in SPLITS:
-        rows = _build_split(split)
-        _dump(out_dir / f"{split}.jsonl", [_public_row(r) for r in rows])
-        counts[split] = len(rows)
+    rows = _build_split("dev")
+    _dump(out_dir / "dev.jsonl", [_public_row(r) for r in rows])
+    counts["dev"] = len(rows)
     checks = _build_scorer_checks()
     _dump(out_dir / "scorer_checks.jsonl", checks)
     counts["scorer_checks"] = len(checks)
