@@ -80,6 +80,31 @@ def bash(command: str) -> subprocess.CompletedProcess:
     "make -s unlock-alibi",
     "make unlock-alibi",
     "make -C . unlock-alibi",
+    # quoting and spelling dodges must not slip past the path check
+    "rm -rf alibi/team_''evals",
+    "rm -rf 'alibi/team_evals'",
+    "rm -rf \"alibi/team_evals\"",
+    "rm -rf alibi/team_evals/",
+    "rm -rf alibi/team_evals/../team_evals",
+    "rm -rf alibi/team_evals/*",
+    "rm -rf alibi/team_*",
+    # an ancestor of a protected path carries the whole tree away with it
+    "rm -rf alibi",
+    "rm -rf reference/alibi",
+    "rm -rf .claude",
+    "rm -rf .",
+    "touch alibi",
+    "mv alibi/datasets /tmp/x",
+    # writes to the other protected locations
+    "chmod u+w alibi/datasets/heldout.jsonl",
+    "chmod u+w reference/alibi/organiser_evals.py",
+    "chmod u+w .claude/hooks/protect-alibi-evals.sh",
+    "rm .claude/settings.json",
+    "mv reference/alibi/gates.toml /tmp/x",
+    "echo x > reference/alibi/gates.toml",
+    "echo x > alibi/datasets/dev.jsonl",
+    "cat /etc/passwd | tee .claude/settings.json",
+    "shlex-unbalanced ' rm -rf alibi/team_evals",
 ])
 def test_writes_and_unlock_are_blocked_while_locked(command):
     r = bash(command)
@@ -108,6 +133,13 @@ def test_writes_and_unlock_are_blocked_while_locked(command):
     "python -m alibi.checks",
     "uv run python -m alibi.evals --split dev --trials 1",
     "uv run pytest -q alibi",
+    "uv run python -m alibi.evals --split dev",
+    "ls alibi",
+    "ls reference/alibi",
+    "cat reference/alibi/gates.toml",
+    "cat alibi/datasets/dev.jsonl",
+    "git diff -- reference/alibi/organiser_evals.py",
+    "diff alibi/datasets/dev.jsonl alibi/datasets/dev.jsonl",
 ])
 def test_reads_and_eval_runs_pass_while_locked(command):
     r = bash(command)
@@ -117,6 +149,8 @@ def test_reads_and_eval_runs_pass_while_locked(command):
 @pytest.mark.usefixtures("locked")
 def test_unrelated_commands_pass_while_locked():
     assert bash("cat README.md").returncode == 0
+    assert bash("rm -rf /tmp/foo").returncode == 0
+    assert bash("rm -rf scratch").returncode == 0
 
 
 @pytest.mark.usefixtures("locked")
@@ -137,14 +171,60 @@ def test_write_paths_are_normalized_before_matching():
     assert hook("Write", file_path=twisted, content="x").returncode == 2
 
 
+@pytest.mark.usefixtures("locked")
+def test_other_protected_paths_are_blocked_for_edits():
+    cases = [
+        ("Edit", {"file_path": str(ROOT / "reference" / "alibi" / "organiser_evals.py"),
+                  "old_string": "a", "new_string": "b"}),
+        ("Edit", {"file_path": str(ROOT / ".claude" / "hooks" / "protect-alibi-evals.sh"),
+                  "old_string": "a", "new_string": "b"}),
+        ("Edit", {"file_path": str(ROOT / ".claude" / "settings.json"),
+                  "old_string": "a", "new_string": "b"}),
+        ("Write", {"file_path": str(ROOT / "alibi" / "datasets" / "new.jsonl"),
+                   "content": "x"}),
+        ("Write", {"file_path": str(ROOT / "reference" / "alibi" / "evil.py"),
+                   "content": "x"}),
+        ("Write", {"file_path": str(ROOT / ".claude" / "settings.json"),
+                   "content": "x"}),
+        ("Edit", {"file_path": str(ROOT / "reference" / "alibi" / "organiser_evals.py")
+                  .replace("alibi", "alibi/..//alibi"),
+                  "old_string": "a", "new_string": "b"}),
+    ]
+    for tool, tool_input in cases:
+        path = tool_input["file_path"]
+        r = hook(tool, **tool_input)
+        assert r.returncode == 2, f"{path}: {r.stderr}"
+
+
+@pytest.mark.usefixtures("locked")
+def test_unrelated_edit_paths_pass_while_locked():
+    ok = [
+        ("Edit", {"file_path": str(ROOT / "alibi" / "evals.py"),
+                  "old_string": "a", "new_string": "b"}),
+        ("Edit", {"file_path": str(ROOT / "alibi" / "tests" / "test_evals.py"),
+                  "old_string": "a", "new_string": "b"}),
+        ("Write", {"file_path": str(ROOT / "connect4" / "notes.md"), "content": "x"}),
+    ]
+    for tool, tool_input in ok:
+        assert hook(tool, **tool_input).returncode == 0, tool_input["file_path"]
+
+
 def test_hook_is_inert_when_unlocked(unlocked):
     assert bash("rm alibi/team_evals/.locked").returncode == 0
+    assert bash("rm -rf alibi/team_evals").returncode == 0
+    assert bash("chmod u+w alibi/datasets/heldout.jsonl").returncode == 0
+    assert bash("make unlock-alibi").returncode == 0
     assert hook("Edit", file_path=str(TEAM / "gates.toml"),
+                old_string="a", new_string="b").returncode == 0
+    assert hook("Edit", file_path=str(ROOT / "reference" / "alibi" / "organiser_evals.py"),
+                old_string="a", new_string="b").returncode == 0
+    assert hook("Edit", file_path=str(ROOT / ".claude" / "settings.json"),
                 old_string="a", new_string="b").returncode == 0
 
 
 def test_lock_alibi_strips_write_bits_and_unlock_restores_them():
-    originals = {p: stat.S_IMODE(p.stat().st_mode) for p in PROTECTED}
+    tracked = PROTECTED + [TEAM, ROOT / "alibi" / "datasets"]
+    originals = {p: stat.S_IMODE(p.stat().st_mode) for p in tracked}
     existed, content = _save_lock()
     try:
         subprocess.run(["make", "lock-alibi"], cwd=ROOT, check=True,
@@ -152,12 +232,16 @@ def test_lock_alibi_strips_write_bits_and_unlock_restores_them():
         assert LOCK.exists()
         for p in PROTECTED:
             assert stat.S_IMODE(p.stat().st_mode) & 0o222 == 0, p
+        for d in (TEAM, ROOT / "alibi" / "datasets"):
+            assert stat.S_IMODE(d.stat().st_mode) & 0o222 == 0, d
 
         subprocess.run(["make", "unlock-alibi"], cwd=ROOT, check=True,
                        capture_output=True, text=True)
         assert not LOCK.exists()
         for p in PROTECTED:
             assert stat.S_IMODE(p.stat().st_mode) == originals[p], p
+        for d in (TEAM, ROOT / "alibi" / "datasets"):
+            assert stat.S_IMODE(d.stat().st_mode) == originals[d], d
     finally:
         # Restore modes and any real lock even if an assertion failed mid-way.
         for p, mode in originals.items():
