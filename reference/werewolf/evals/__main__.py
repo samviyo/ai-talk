@@ -127,19 +127,24 @@ def evaluate(runs_dir: Path, thresholds: dict, seat: int | None = None,
         gate=enough,
     ))
 
-    # Seer follow-through.
+    # Seer follow-through: gated only when the seer actually identified a wolf.
     dealt = identified = 0
     for (_, _, log), s in zip(games, scopes):
         d, i = checks.seer_follow_through(log, seats=s)
         dealt += d
         identified += i
-    ft = dealt / identified if identified else 1.0
-    rows.append(Row(
-        "seer follow-through",
-        ft >= thresholds["min_seer_follow_through"] or identified == 0,
-        f"{dealt}/{identified} identified wolves voted out within a day"
-        + ("" if identified else " — no seer identifications"),
-    ))
+    if identified:
+        ft = dealt / identified
+        rows.append(Row(
+            "seer follow-through",
+            ft >= thresholds["min_seer_follow_through"],
+            f"{dealt}/{identified} identified wolves voted out within a day",
+        ))
+    else:
+        rows.append(Row(
+            "seer follow-through", True,
+            "insufficient evidence: no wolves identified", gate=False,
+        ))
 
     # Budget: nobody broke.
     broke_games = sum(
