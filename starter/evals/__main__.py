@@ -63,9 +63,13 @@ def main() -> None:
         )
         sys.exit(1)
 
-    data = game_views(args.runs, seat=args.seat, team=args.team, latest=args.latest)
+    data = game_views(args.runs, seat=args.seat, team=args.team, latest=args.latest) \
+        if args.runs.is_dir() else []
     if not data:
-        print(f"no transcripts with scoreable seats under {args.runs}")
+        print(f"\nRED: no transcripts with scoreable seats under {args.runs}.\n"
+              "  Play some first: make practice N=3 (needs BIFROST_API_KEY), or with no key\n"
+              "  uv run python -m evals.practice --games 3 --fake-llm (canned LLM\n"
+              "  replies, so those games test your suite, not your bot).")
         sys.exit(1)
 
     rows = harness.run_suite(data, scorers, gates, f"games over {args.runs}",

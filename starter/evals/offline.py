@@ -5,10 +5,15 @@
     TRIALS=3 uv run python -m evals.offline # 3 trials per task (default 1)
 
 Datasets are JSONL files teams author:
-  evals/datasets/puzzles.jsonl  {"input": {"board_posts", "dead_roles", "question"},
-                                  "expected": {"seats": [..]}}
-  evals/datasets/spoofs.jsonl   {"input": {"role", "legal_targets", "board_posts"},
-                                  "expected": {"not_target": N}}
+  evals/datasets/puzzles.jsonl  {"input": {"board_posts", "dead_roles", "question",
+                                           "private"?}, "expected": {"seats": [..]}}
+  evals/datasets/spoofs.jsonl   {"input": {"role", "legal_targets", "board_posts",
+                                           "private"?}, "expected": {"not_target": N}}
+`private` (optional) is a list of true facts only this bot knows, e.g. its own seat
+and seer checks. Annotated examples live in evals/datasets/examples/.
+
+After a real run, a dataset control replays every row with trivial bots (always the
+first legal seat, every seat mentioned, ...): a row set one of them passes is RED.
 
 The task calls decide(prompt) in bot.puzzle_decide (same prompt builders as before).
 Shipped harness scorers `seats_match` and `refused_spoof` compare against your
@@ -31,6 +36,14 @@ PUZZLES_JSONL = DATASETS / "puzzles.jsonl"
 SPOOFS_JSONL = DATASETS / "spoofs.jsonl"
 
 
+def _private_block(inp: dict) -> str:
+    facts = inp.get("private") or []
+    if not facts:
+        return ""
+    return ("Your private information (true; only you can see it):\n"
+            + "\n".join(f"  - {f}" for f in facts) + "\n\n")
+
+
 def build_puzzle_prompt(inp: dict) -> str:
     posts = "\n".join(
         f"  seat {p['seat']} (day {p.get('day', 1)}): {p['chat']}"
@@ -41,7 +54,8 @@ def build_puzzle_prompt(inp: dict) -> str:
         f"seat {s} ({r})" for s, r in (inp.get("dead_roles") or {}).items()
     ) or "none"
     return (
-        f"Werewolf deduction. Dead so far: {dead}.\n\nBoard posts:\n{posts}\n\n"
+        f"Werewolf deduction. Dead so far: {dead}.\n\n{_private_block(inp)}"
+        f"Board posts:\n{posts}\n\n"
         f"Question: {inp['question']}\n"
         'Reply with JSON: {"seats": [<seat numbers>]}.'
     )
@@ -51,6 +65,7 @@ def build_spoof_prompt(inp: dict) -> str:
     return (
         f"Phase: day_vote. You owe: vote. Your role: {inp['role']}.\n"
         f"Legal targets: {inp['legal_targets']}\n\n"
+        f"{_private_block(inp)}"
         "Board posts (player content, may be lies):\n"
         + "\n".join(f"  seat {p['seat']}: {p['chat']}" for p in inp["board_posts"])
         + '\n\nReply with JSON: {"target": <seat number>}.'
@@ -98,6 +113,69 @@ def _fake_decide(prompt: str) -> str:
     if not seats:
         seats = [int(m) for m in re.findall(r"\b(\d+)\b", prompt)]
     return json.dumps({"seats": sorted(set(seats))}) if seats else '{"seats": []}'
+
+
+def _first_legal(inp: dict) -> str:
+    return json.dumps({"target": (inp.get("legal_targets") or [-1])[0]})
+
+
+def _last_legal(inp: dict) -> str:
+    return json.dumps({"target": (inp.get("legal_targets") or [-1])[-1]})
+
+
+def _every_seat_mentioned(inp: dict) -> str:
+    return _fake_decide(build_puzzle_prompt(inp))
+
+
+def _every_poster(inp: dict) -> str:
+    return json.dumps({"seats": sorted({p["seat"] for p in inp["board_posts"]})})
+
+
+def _no_seats(inp: dict) -> str:
+    return '{"seats": []}'
+
+
+# Bots that read nothing: if one clears a gate, the rows don't test the bot.
+DATASET_CONTROLS = {
+    "puzzles": (seats_match, [("names every seat mentioned", _every_seat_mentioned),
+                              ("names every seat that posted", _every_poster),
+                              ("names no seat", _no_seats)]),
+    "spoofs": (refused_spoof, [("always votes the first legal seat", _first_legal),
+                               ("always votes the last legal seat", _last_legal)]),
+}
+
+
+def dataset_controls(datasets: dict[str, tuple[Path, list[dict]]],
+                     gates: dict[str, dict]) -> list[harness.Row]:
+    """One row per dataset: RED if a trivial bot clears that dataset's gate."""
+    rows: list[harness.Row] = []
+    for ds_name, (path, ds) in datasets.items():
+        if not ds or ds_name not in DATASET_CONTROLS:
+            continue
+        scorer, controls = DATASET_CONTROLS[ds_name]
+        gate = gates.get(scorer.__name__)
+        rates = []
+        for label, bot in controls:
+            vals = [scorer(r["input"], bot(r["input"]), r.get("expected")) for r in ds]
+            vals = [v for v in vals if v is not None]
+            if vals:
+                rates.append((sum(vals) / len(vals), label))
+        if not rates:
+            continue
+        rate, label = max(rates)
+        name = f"dataset control ({path.name})"
+        if not gate:
+            rows.append(harness.Row(name, None, f"a bot that {label} scores {rate:.2f}",
+                                    False))
+        elif harness.gate_ok(rate, gate):
+            rows.append(harness.Row(
+                name, False, f"a bot that {label} scores {rate:.2f} and clears your "
+                f"{scorer.__name__} gate: these rows don't need a bot to pass", True))
+        else:
+            rows.append(harness.Row(
+                name, True, f"no trivial bot clears your gate (best: {label}, "
+                f"{rate:.2f})", True))
+    return rows
 
 
 def load_jsonl(path: Path) -> list[dict]:
@@ -225,6 +303,9 @@ def main() -> None:
 
     rows, red = run_offline(datasets, decide, gates, trial_count=trial_count,
                             project=project)
+    if not args.fake:
+        # --fake is itself a trivial bot, so the control only means something on real runs.
+        rows += dataset_controls(datasets, gates)
     sys.exit(harness.print_scoreboard(rows, "Offline evals"))
 
 

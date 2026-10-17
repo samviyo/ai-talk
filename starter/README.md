@@ -41,7 +41,10 @@ make check            # offline: your puzzle + spoof datasets through decide()
 2. Read the transcripts in `runs/practice/` — error analysis. List the failure
    modes, biggest first.
 3. Write one scorer per failure mode in `evals/scorers/*.py`, gate each in
-   `evals/gates.toml`, and author offline tasks in `evals/datasets/*.jsonl`:
+   `evals/gates.toml`, and author offline tasks in `evals/datasets/*.jsonl`.
+   Start from the annotated rows in `evals/datasets/examples/` (its README says what
+   makes a row fair). `make check` replays your rows with trivial bots and goes RED
+   if one clears your gate:
 
 ```python
 def score_vote_wolf(input, output, expected=None, **kwargs) -> float | bool | None:
