@@ -2,8 +2,9 @@
 
 Rows are assembled from predetermined mock tool outcomes, so every label is
 known by construction and nothing is hand-labelled. `python -m alibi.fixtures`
-regenerates `dev.jsonl` and `scorer_checks.jsonl` byte-identically from the
-seed below. Held-out rows are never written to disk: they are generated in
+regenerates `dev.jsonl`, `scorer_checks.jsonl` (teams see no explanations) and
+the organiser-only `reference/alibi/scorer_check_notes.jsonl`, byte-identically
+from the seed below. Held-out rows are never written to disk: they are generated in
 memory from `heldout_rows(seed)` at reveal time, where the seed comes from
 env `ALIBI_HELDOUT_SEED` (the organiser announces it at the reveal).
 
@@ -508,10 +509,15 @@ def _deep(obj):
     return json.loads(json.dumps(obj))
 
 
-def _build_scorer_checks() -> list[dict]:
-    """One row per correct/equivalent/wrong kind named in the contract."""
+def _build_scorer_checks() -> tuple[list[dict], list[dict]]:
+    """One row per correct/equivalent/wrong kind named in the contract.
+
+    Returns (checks, notes): checks carry no explanation; notes are the
+    organiser-only {"id", "why"} rows written beside the reference suite.
+    """
     rows = _build_split("dev")
     checks: list[dict] = []
+    notes: list[dict] = []
 
     def add(row, output, label, why):
         checks.append(
@@ -521,9 +527,9 @@ def _build_scorer_checks() -> list[dict]:
                 "expected": row["expected"],
                 "output": output,
                 "label": label,
-                "why": why,
             }
         )
+        notes.append({"id": checks[-1]["id"], "why": why})
 
     # correct: exact expected copy
     base, _ = _claim_of_pattern(rows, "plain_ok")
@@ -626,7 +632,7 @@ def _build_scorer_checks() -> list[dict]:
     add(row, "Looks like everything got done - the final summary says so.", "wrong",
         "malformed output; harness passes it through unchanged")
 
-    return checks
+    return checks, notes
 
 
 def _entity_of_claim(row: dict, claim_id: str) -> str:
@@ -648,19 +654,26 @@ def _dump(path: Path, rows: list[dict]) -> None:
     )
 
 
-def regenerate(out_dir: Path = DATASETS_DIR) -> dict[str, int]:
-    """Write dev.jsonl and scorer_checks.jsonl; byte-identical on every call.
+def regenerate(out_dir: Path = DATASETS_DIR,
+               notes_dir: Path | None = None) -> dict[str, int]:
+    """Write dev.jsonl, scorer_checks.jsonl and the organiser-only notes file.
 
-    Held-out rows are generated in memory (`heldout_rows`) and never written.
+    Every call is byte-identical. Held-out rows are generated in memory
+    (`heldout_rows`) and never written.
     """
+    if notes_dir is None:
+        notes_dir = out_dir.parent.parent / "reference" / "alibi"
     out_dir.mkdir(parents=True, exist_ok=True)
+    notes_dir.mkdir(parents=True, exist_ok=True)
     counts: dict[str, int] = {}
     rows = _build_split("dev")
     _dump(out_dir / "dev.jsonl", [_public_row(r) for r in rows])
     counts["dev"] = len(rows)
-    checks = _build_scorer_checks()
+    checks, notes = _build_scorer_checks()
     _dump(out_dir / "scorer_checks.jsonl", checks)
     counts["scorer_checks"] = len(checks)
+    _dump(notes_dir / "scorer_check_notes.jsonl", notes)
+    counts["scorer_check_notes"] = len(notes)
     return counts
 
 

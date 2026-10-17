@@ -26,7 +26,7 @@ def _split_rows(split):
 @pytest.fixture(scope="module")
 def regenerated(tmp_path_factory):
     out = tmp_path_factory.mktemp("alibi_datasets")
-    fixtures.regenerate(out)
+    fixtures.regenerate(out, notes_dir=out)
     return out
 
 
@@ -83,10 +83,32 @@ def test_heldout_seed_env_reads_integer(monkeypatch):
 
 
 def test_scorer_checks_regenerate_identically(tmp_path):
-    fixtures.regenerate(tmp_path)
+    fixtures.regenerate(tmp_path, notes_dir=tmp_path)
     assert (tmp_path / "scorer_checks.jsonl").read_text() == (
         fixtures.DATASETS_DIR / "scorer_checks.jsonl"
     ).read_text()
+    assert (tmp_path / "scorer_check_notes.jsonl").read_text() == (
+        fixtures.DATASETS_DIR.parent.parent / "reference" / "alibi"
+        / "scorer_check_notes.jsonl"
+    ).read_text()
+
+
+def test_scorer_checks_have_no_why_and_notes_cover_every_id():
+    checks = [
+        json.loads(l)
+        for l in (fixtures.DATASETS_DIR / "scorer_checks.jsonl").read_text().splitlines()
+        if l
+    ]
+    for c in checks:
+        assert "why" not in c, c["id"]
+    notes_path = (
+        fixtures.DATASETS_DIR.parent.parent / "reference" / "alibi"
+        / "scorer_check_notes.jsonl"
+    )
+    notes = [json.loads(l) for l in notes_path.read_text().splitlines() if l]
+    for n in notes:
+        assert set(n) == {"id", "why"}, n
+    assert {c["id"] for c in checks} == {n["id"] for n in notes}
 
 
 def test_equivalent_check_rows_differ_from_expected():
@@ -97,7 +119,7 @@ def test_equivalent_check_rows_differ_from_expected():
     ]
     for c in checks:
         if c["label"] == "equivalent":
-            assert c["output"] != c["expected"], (c["id"], c["why"])
+            assert c["output"] != c["expected"], (c["id"],)
 
 
 def test_scorer_checks_cover_every_kind():
@@ -111,7 +133,7 @@ def test_scorer_checks_cover_every_kind():
     assert labels["equivalent"] >= 4
     assert labels["wrong"] >= 7
     for c in checks:
-        assert set(c) >= {"id", "input", "expected", "output", "label", "why"}
+        assert set(c) >= {"id", "input", "expected", "output", "label"}
         # the canned row must be a real dev row
         assert any(
             row["id"] == c["id"] or row["input"] == c["input"] for row in fixtures.load_rows("dev")
