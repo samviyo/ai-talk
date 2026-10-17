@@ -403,3 +403,48 @@ def test_missing_dataset_is_red_not_crash(capsys, monkeypatch, tmp_path, stub_bo
     out = capsys.readouterr().out
     assert rc == 1
     assert "missing alibi/datasets/dev.jsonl" in out
+
+
+def test_gated_scorer_with_no_applicable_rows_is_insufficient_evidence(
+        capsys, monkeypatch, tmp_path, stub_bot, all_achieved_bot, team_scorers):
+    _install_datasets(monkeypatch, tmp_path)
+    _install_scorers(team_scorers,
+                     VERDICT_SCORER
+                     + "\ndef score_never(input, output, expected=None, **kw):\n"
+                       "    return None\n",
+                     VERDICT_GATE + "\n[score_never]\nmin = 0.5\n")
+    rc = _run()
+    out = capsys.readouterr().out
+    assert rc == 1, out
+    assert "insufficient evidence: 0 applicable trial(s), gate needs min_n=1" in out
+    # The gate that measured nothing must not count as catching the negative control.
+    assert "all_achieved bot fails your gates" in out  # caught by score_verdicts instead
+
+
+def test_min_n_above_applicable_count_is_red(capsys, monkeypatch, tmp_path, stub_bot,
+                                             all_achieved_bot, team_scorers):
+    _install_datasets(monkeypatch, tmp_path)  # two dev rows
+    _install_scorers(team_scorers, VERDICT_SCORER, "[score_verdicts]\nmin = 1.0\nmin_n = 3\n")
+    rc = _run()
+    out = capsys.readouterr().out
+    assert rc == 1, out
+    assert "insufficient evidence: 2 applicable trial(s), gate needs min_n=3" in out
+
+
+def test_pass_k_counts_a_partly_unscored_row_as_a_miss(capsys, monkeypatch, tmp_path,
+                                                       stub_bot, all_achieved_bot,
+                                                       team_scorers):
+    _install_datasets(monkeypatch, tmp_path)
+    # Each row scores 1.0 on one trial and None on the other: pass^2 must not credit it.
+    _install_scorers(team_scorers,
+                     VERDICT_SCORER
+                     + "\nSEEN = {}\n"
+                       "def score_flaky(input, output, expected=None, **kw):\n"
+                       "    key = input['task']\n"
+                       "    SEEN[key] = SEEN.get(key, 0) + 1\n"
+                       "    return 1.0 if SEEN[key] % 2 else None\n",
+                     VERDICT_GATE + "\n[score_flaky]\nmin = 0.5\n")
+    _run(trials=2)
+    out = capsys.readouterr().out
+    assert "score_flaky" in out
+    assert "pass^2 0.0% (0/2)" in out, out

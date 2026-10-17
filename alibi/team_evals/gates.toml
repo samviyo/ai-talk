@@ -3,6 +3,7 @@
 #
 #   [score_verdicts]
 #   min = 0.8
+#   min_n = 10   # optional: fewest applicable trials; fewer is RED (default 1)
 #
 # A scorer listed here with no table stays an info row; a table with no
 # matching scorer is ignored. Remove this file's comments once you add yours.

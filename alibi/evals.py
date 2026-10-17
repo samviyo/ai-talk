@@ -24,6 +24,7 @@ SPLITS = ("dev", "heldout")
 NEGATIVE_CONTROL = "alibi.bots.all_achieved:audit"
 DEFAULT_BOT = "alibi.bots.naive:audit"
 MAX_CONCURRENCY = 8
+INSUFFICIENT = "insufficient evidence"
 
 DATASETS_DIR = Path(__file__).resolve().parent / "datasets"
 
@@ -118,7 +119,7 @@ def _aggregate(wrapped_fns: dict[str, Any], ev, scorers: list[Scorer],
     """Fold Eval() output into per-scorer means, error counts, and pass^k."""
     agg = {s.name: {"values": [], "errors": 0, "pass_k": None,
                     "first_error": None} for s in scorers}
-    by_case: dict[str, dict[str, list[float]]] = {s.name: {} for s in scorers}
+    by_case: dict[str, dict[str, list[float | None]]] = {s.name: {} for s in scorers}
     for index, result in enumerate(ev.results):
         task_error = getattr(result, "error", None)
         sdk_errors = _result_scorer_errors(result)
@@ -141,6 +142,7 @@ def _aggregate(wrapped_fns: dict[str, Any], ev, scorers: list[Scorer],
                         wrapped_fns, scorer.name, sdk_errors[scorer.name])
                 continue
             if value is None:
+                by_case[scorer.name].setdefault(key, []).append(None)
                 continue
             if math.isnan(value):
                 entry["errors"] += 1
@@ -150,14 +152,15 @@ def _aggregate(wrapped_fns: dict[str, Any], ev, scorers: list[Scorer],
                 entry["values"].append(value)
                 by_case[scorer.name].setdefault(key, []).append(value)
     if trials > 1:
-        # pass^k: a row passed k-of-k only if every trial scored it a hit.
+        # pass^k: a row passed k-of-k only if all k trials were scored and every one hit.
         for scorer in scorers:
             hits = total = 0
             for vals in by_case[scorer.name].values():
-                if len(vals) >= trials:
-                    total += 1
-                    if all(v >= 1.0 for v in vals):
-                        hits += 1
+                if all(v is None for v in vals):
+                    continue  # not applicable to this row
+                total += 1
+                if len(vals) >= trials and all(v is not None and v >= 1.0 for v in vals):
+                    hits += 1
             if total:
                 agg[scorer.name]["pass_k"] = {
                     "rate": hits / total, "hits": hits, "total": total, "k": trials}
@@ -185,6 +188,10 @@ def build_rows(agg: dict[str, dict], gates: dict[str, Gate]) -> list[tuple[str, 
             continue
         values = entry["values"]
         gate = gates.get(name)
+        if gate is not None and len(values) < gate.min_n:
+            rows.append((name, "RED", f"{INSUFFICIENT}: {len(values)} applicable trial(s), "
+                                      f"gate needs min_n={gate.min_n}"))
+            continue
         if not values:
             rows.append((name, "info", "no applicable rows (returned None)"))
             continue
@@ -220,8 +227,8 @@ def _negative_control_rows(scorers: list[Scorer], gates: dict[str, Gate],
             why = f": {e['first_error']}" if e["first_error"] else ""
             out.append((f"all_achieved: {name}", "RED",
                         f"negative control (scorer error) ({e['errors']} row(s)){why}"))
-        elif verdict == "RED":
-            live = True
+        elif verdict == "RED" and not detail.startswith(INSUFFICIENT):
+            live = True  # a gate that measured nothing has not caught the control
     out.insert(0, ("negative control", "GREEN" if live else "RED",
                    "all_achieved bot fails your gates" if live
                    else "your suite passes the all_achieved bot"))

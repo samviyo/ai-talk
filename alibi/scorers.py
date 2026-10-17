@@ -37,9 +37,10 @@ class Scorer:
 
 @dataclass(frozen=True)
 class Gate:
-    """A gate: the scorer mean must be at least `min` over applicable rows."""
+    """A gate: the scorer mean must be at least `min` over at least `min_n` applicable trials."""
 
     min: float
+    min_n: int = 1
 
 
 def load_scorers(override_dir: str | None = None) -> list[Scorer]:
@@ -65,7 +66,8 @@ def load_gates(override_dir: str | None = None) -> dict[str, Gate]:
     if not path.exists():
         return {}
     raw = tomllib.loads(path.read_text())
-    return {name: Gate(min=float(v["min"])) for name, v in raw.items()
+    return {name: Gate(min=float(v["min"]), min_n=int(v.get("min_n", 1)))
+            for name, v in raw.items()
             if isinstance(v, dict) and "min" in v}
 
 

@@ -18,7 +18,11 @@ def score_verdicts(input, output, expected=None, **kw):
   `output` is the auditor bot's raw return — it may be junk; never raise for
   bad bot output, score it `0.0`.
 - `gates.toml`: `[score_verdicts]` / `min = 0.8` turns a scorer into a gate.
-  A scorer with no gate is reported as an info row.
+  A scorer with no gate is reported as an info row. Optional `min_n = 10`
+  is the fewest applicable (non-`None`) trials the gate needs; below it the gate
+  is RED as "insufficient evidence" (default 1, so a gate that measured
+  nothing never passes). `None` means "this row doesn't test this", decided
+  by the row — never use it for a bad bot answer.
 
 ## Row shape
 
