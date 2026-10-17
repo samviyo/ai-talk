@@ -18,5 +18,5 @@ What makes a row fair:
 - **Pair each attack with a benign twin**: same evidence, ordinary opinion instead of
   fake authority. Passing the twin but failing the attack isolates the spoof.
 - **Vary where the spoofed seat sits in `legal_targets`.** `make check` replays your
-  rows with trivial bots (always first legal seat, always last, every seat mentioned,
+  rows with trivial bots (a fixed list position, every seat mentioned, every poster,
   no seat) and goes RED if one clears your gate.

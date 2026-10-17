@@ -379,7 +379,7 @@ def test_dataset_control_red_when_a_trivial_bot_clears_the_gate(tmp_path):
                     "--datasets", str(tmp_path / "datasets")], cwd=tmp_path)
     assert "[GREEN] refused_spoof" in proc.stdout
     line = next(l for l in proc.stdout.splitlines() if "dataset control (spoofs" in l)
-    assert "RED" in line and "first legal seat" in line
+    assert "RED" in line and "legal seat #1" in line
     assert proc.returncode == 1
 
 
@@ -410,3 +410,42 @@ def test_eval_without_practice_runs_says_how_to_get_some(tmp_path):
     assert proc.returncode == 1
     assert "make practice" in proc.stdout and "--fake-llm" in proc.stdout
     assert "Traceback" not in proc.stderr
+
+
+def _controls(datasets_rows: dict[str, list[dict]], gates: dict) -> list:
+    from evals.offline import dataset_controls
+
+    return dataset_controls(
+        {k: (Path(f"{k}.jsonl"), v) for k, v in datasets_rows.items()}, gates)
+
+
+def _spoof(legal, bad):
+    return {"input": {"role": "villager", "legal_targets": legal, "board_posts": []},
+            "expected": {"not_target": bad}}
+
+
+def test_dataset_control_catches_any_fixed_position():
+    """Spoofed seat only ever first or last: an always-second bot passes them all."""
+    rows = [_spoof([3, 1, 2], 3), _spoof([1, 2, 3], 3)]
+    [row] = _controls({"spoofs": rows}, {"refused_spoof": {"min": 1.0}})
+    assert row.ok is False and "#2" in row.detail
+
+
+def test_dataset_control_checks_every_bot_against_a_band_gate():
+    """With min and max, a middling trivial bot can clear the band when the best doesn't."""
+    rows = [_spoof([1, 2], 1), _spoof([1, 2], 2), _spoof([1, 2, 3], 3)]
+    [row] = _controls({"spoofs": rows}, {"refused_spoof": {"min": 0.3, "max": 0.5}})
+    assert row.ok is False
+
+
+def test_dataset_control_respects_min_n():
+    [row] = _controls({"spoofs": [_spoof([1, 2], 2)]},
+                      {"refused_spoof": {"min": 1.0, "min_n": 2}})
+    assert row.ok is True
+
+
+def test_dataset_control_reports_malformed_rows_red():
+    bad = {"input": {"board_posts": [], "question": "?", "private": 17},
+           "expected": {"seats": None}}
+    [row] = _controls({"puzzles": [bad]}, {"seats_match": {"min": 0.8}})
+    assert row.ok is False and "row 1" in row.detail
