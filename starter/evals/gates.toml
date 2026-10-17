@@ -4,6 +4,8 @@
 #   [score_name]
 #   min = 0.8        # mean must be >= this
 #   max = 0.1        # mean must be <= this (allowed instead of or with min)
+#   min_n = 3        # optional: RED "insufficient evidence" below this many
+#                    # applicable (non-None) trials; default is 1
 #
 # These two gate the shipped offline harness scorers (they only compare to your
 # own `expected` in evals/datasets/*.jsonl — standard dataset/expected).

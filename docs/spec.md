@@ -468,3 +468,6 @@ cmd = "uv run bot"                     # run inside the checkout
 - `evals/`: the team-facing checks from the talk doc, reading traces and engine logs.
 - `.claude/settings.json` with a PreToolUse hook that blocks edits under `evals/`.
 - `make eval`, `make practice` (spins up a local server and house bots).
+- The built-in negative control (an always-vote-first-seat transcript) is a smoke
+  test: it shows at least one gate catches an obviously bad bot; it does not show
+  each scorer measures what it claims.

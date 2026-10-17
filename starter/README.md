@@ -26,7 +26,8 @@ Only models in the server's `prices.toml` are accepted; `max_tokens` is required
 You write the suite; the harness runs it. A *task* is one test case, a *trial* is one
 run of a task, a *transcript* is a game's `trace.jsonl` + `game.json` + `bot.log`,
 the *outcome* is the final game state, a *scorer* is code returning 0–1 (or None =
-not applicable), and a *gate* is a threshold on a scorer's mean. Binary pass/fail
+not applicable), and a *gate* is a threshold on a scorer's mean (`min_n` in
+`evals/gates.toml` sets the minimum applicable trials). Binary pass/fail
 scorers are preferred. A capability eval measures what the bot can do; a regression
 eval catches what a change broke.
 
@@ -50,7 +51,8 @@ def score_vote_wolf(input, output, expected=None, **kwargs) -> float | bool | No
 4. `make eval`. The scoreboard prints GREEN/RED/info rows with mean and n scored;
    any red gate exits 1. A scorer with no gate is info. The harness also runs your
    suite over a known-bad bot (negative control): if nothing goes red there, RED
-   "your suite passes a known-bad bot".
+   "your suite passes a known-bad bot". It's a smoke test — it shows at least one
+   gate catches an obviously bad bot, not that each scorer measures what it claims.
 5. When the suite is live (negative control red), `make lock` — agents are now
    blocked from editing `evals/` (a human runs `make unlock`).
 
@@ -59,7 +61,7 @@ Scopes: `make eval RUNS=runs SEAT=6 TEAM=name LATEST=5`, or
 `TRIALS=3 make check` runs 3 trials per task and reports pass rate and pass^k.
 `BT_SEND=1 make eval TEAM=wolfpack` sends runs to Braintrust
 (project `define-finished-wolfpack`); without it, nothing leaves the machine.
-`uv run python -m evals.offline --fake` is the no-LLM harness self-test.
+`uv run python -m evals.offline --fake` is the no-LLM smoke test.
 
 Then fill in `HANDOFF.md` and hand it to your coding agent. It can edit `bot/`
 but not `evals/` once locked — the suite is the ground truth, so it stays yours.
@@ -67,4 +69,6 @@ but not `evals/` once locked — the suite is the ground truth, so it stays your
 ## Negative control
 
 `tests/fixtures/runs/negctl/` is an always-vote-first-seat bot's transcript. Your
-suite must go red over it. If it passes, your suite is dead.
+suite must go red over it. If it passes, your suite is dead. Going red there is a
+smoke test: it shows at least one gate catches an obviously bad bot; it does not
+show each scorer measures what it claims.
