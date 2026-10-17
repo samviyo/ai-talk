@@ -10,3 +10,14 @@ ALIBI_TEAM_EVALS_DIR=reference/alibi uv run python -m alibi.evals --bot alibi.bo
 ```
 
 Tests: `uv run pytest reference/alibi -q`.
+
+## Held-out reveal
+
+Held-out rows are never committed: they are generated in memory from the seed
+in env `ALIBI_HELDOUT_SEED`, an integer the organiser announces at the reveal.
+`make reveal-alibi` runs the team suite dev vs held-out, then this reference
+suite on the held-out split, and fails if either is red:
+
+```
+ALIBI_HELDOUT_SEED=<announced> make reveal-alibi ALIBI_BOT=<bot>
+```

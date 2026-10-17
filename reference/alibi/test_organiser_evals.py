@@ -7,10 +7,13 @@ from pathlib import Path
 import pytest
 
 from alibi import checks
+from alibi.bots import oracle
+from alibi.fixtures import HELDOUT_SEED_ENV, heldout_rows
 from alibi.scorers import load_gates, load_scorers
 from reference.alibi import organiser_evals as ref
 
 REF_DIR = Path(ref.__file__).parent
+HELDOUT_SEED = 4242
 
 
 @pytest.fixture(scope="module")
@@ -173,3 +176,22 @@ def test_always_true_scorer_failure_names_the_reason(tmp_path, capsys):
     out = capsys.readouterr().out
     assert "no gated scorer fails" in out
     assert "constant" in out
+
+
+def test_organiser_suite_scores_the_oracle_perfectly_on_heldout(suite):
+    scorers, gates = suite
+    by_name = {s.name: s.fn for s in scorers}
+    for row in heldout_rows(HELDOUT_SEED):
+        output = oracle.audit(row["input"])
+        for name in by_name:
+            assert by_name[name](input=row["input"], output=output,
+                                 expected=row["expected"]) == 1.0, (row["id"], name)
+
+
+def test_heldout_seed_env_drives_the_rows(monkeypatch):
+    monkeypatch.setenv(HELDOUT_SEED_ENV, str(HELDOUT_SEED))
+    from alibi.fixtures import heldout_seed
+
+    assert heldout_seed() == HELDOUT_SEED
+    rows = heldout_rows(heldout_seed())
+    assert rows == heldout_rows(HELDOUT_SEED)

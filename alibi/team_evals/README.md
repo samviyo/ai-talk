@@ -39,3 +39,8 @@ own assertion, never proof.
 4. `make eval-alibi` — your gates go green and the `all_achieved` negative
    control goes red.
 5. `make lock-alibi` and hand off; the organiser reveals `make reveal-alibi`.
+
+The held-out rows are generated at the reveal from a seed the organiser
+announces then, set as env `ALIBI_HELDOUT_SEED` — they are not in this repo,
+so there is nothing to memorise. `reveal-alibi` also judges your bot with the
+organiser's reference scorers on the held-out split.

@@ -30,8 +30,11 @@ ALIBI_TRIALS ?= 1
 eval-alibi:
 	uv run python -m alibi.evals --bot $(ALIBI_BOT) --split $(ALIBI_SPLIT) --trials $(ALIBI_TRIALS)
 
+ALIBI_REFERENCE_DIR ?= reference/alibi
+
 reveal-alibi:
 	uv run python -m alibi.evals --bot $(ALIBI_BOT) --split $(ALIBI_SPLIT) --trials $(ALIBI_TRIALS) --heldout
+	uv run python -m alibi.evals --bot $(ALIBI_BOT) --split heldout --trials $(ALIBI_TRIALS) --team-evals-dir $(ALIBI_REFERENCE_DIR)
 
 check-alibi:
 	uv run python -m alibi.checks
