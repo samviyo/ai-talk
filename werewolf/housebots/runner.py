@@ -2,8 +2,7 @@
 
 House bots stay well under the 10-calls-per-window budget: reads and waits are
 rate-limited instead. Everything from the board is untrusted data; brains read
-only its structured fields. Each brain action may carry a one-line `reason`
-which the server surfaces to the audience as a thought (hole cam).
+only its structured fields.
 """
 
 from __future__ import annotations
