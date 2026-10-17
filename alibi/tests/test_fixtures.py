@@ -26,7 +26,7 @@ def _split_rows(split):
 @pytest.fixture(scope="module")
 def regenerated(tmp_path_factory):
     out = tmp_path_factory.mktemp("alibi_datasets")
-    fixtures.regenerate(out, notes_dir=out)
+    fixtures.regenerate(out)
     return out
 
 
@@ -83,14 +83,11 @@ def test_heldout_seed_env_reads_integer(monkeypatch):
 
 
 def test_scorer_checks_regenerate_identically(tmp_path):
-    fixtures.regenerate(tmp_path, notes_dir=tmp_path)
+    fixtures.regenerate(tmp_path)
     assert (tmp_path / "scorer_checks.jsonl").read_text() == (
         fixtures.DATASETS_DIR / "scorer_checks.jsonl"
     ).read_text()
-    assert (tmp_path / "scorer_check_notes.jsonl").read_text() == (
-        fixtures.DATASETS_DIR.parent.parent / "reference" / "alibi"
-        / "scorer_check_notes.jsonl"
-    ).read_text()
+    assert not (tmp_path / "scorer_check_notes.jsonl").exists()
 
 
 def test_scorer_checks_have_no_why_and_notes_cover_every_id():
@@ -108,7 +105,28 @@ def test_scorer_checks_have_no_why_and_notes_cover_every_id():
     notes = [json.loads(l) for l in notes_path.read_text().splitlines() if l]
     for n in notes:
         assert set(n) == {"id", "why"}, n
+    assert len(notes) == len({n["id"] for n in notes})  # exactly one note per id
     assert {c["id"] for c in checks} == {n["id"] for n in notes}
+
+
+def test_note_texts_never_appear_under_alibi():
+    notes_path = (
+        fixtures.DATASETS_DIR.parent.parent / "reference" / "alibi"
+        / "scorer_check_notes.jsonl"
+    )
+    whys = [
+        json.loads(l)["why"]
+        for l in notes_path.read_text().splitlines()
+        if l
+    ]
+    assert whys
+    alibi_root = fixtures.DATASETS_DIR.parent
+    for path in alibi_root.rglob("*"):
+        if path.is_file():
+            # bytes + errors=ignore so compiled .pyc artifacts are scanned too
+            text = path.read_bytes().decode("utf-8", errors="ignore")
+            for why in whys:
+                assert why not in text, (path, why)
 
 
 def test_equivalent_check_rows_differ_from_expected():
