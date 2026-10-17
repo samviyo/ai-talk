@@ -120,6 +120,15 @@ def _install_datasets(monkeypatch, tmp_path, splits=("dev",)) -> None:
     for s in splits:
         _dataset(tmp_path, s, rows[s])
     monkeypatch.setattr(evals, "DATASETS_DIR", tmp_path)
+    _install_heldout(monkeypatch, tmp_path)
+
+
+def _install_heldout(monkeypatch, tmp_path) -> None:
+    """Serve crafted held-out rows from tmp_path in place of the seeded generator."""
+    monkeypatch.setenv("ALIBI_HELDOUT_SEED", "1")
+    monkeypatch.setattr(evals, "heldout_rows", lambda seed: [
+        json.loads(line) for line in (tmp_path / "heldout.jsonl").read_text().splitlines()
+        if line.strip()])
 
 
 def _run(bot: str = "stub_bot:audit", **kw) -> int:
@@ -324,6 +333,7 @@ def test_heldout_differs_shows_flag(capsys, monkeypatch, tmp_path, stub_bot,
     for s in ("dev", "heldout"):
         _dataset(tmp_path, s, rows[s])
     monkeypatch.setattr(evals, "DATASETS_DIR", tmp_path)
+    _install_heldout(monkeypatch, tmp_path)
     # Green on dev (claim ids {c1,c2}), red on heldout (different claim ids).
     _install_scorers(team_scorers,
                      "def score_dev_only(input, output, expected=None, **kw):\n"

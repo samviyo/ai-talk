@@ -87,6 +87,8 @@ def touches_abs(p):
 
 
 def token_touches(tok):
+    if "=" in tok and token_touches(tok.split("=", 1)[1]):
+        return True  # X=alibi or --dir=alibi can carry a protected path into a later $X
     if any(c in tok for c in "*?["):
         return any(fnmatch.fnmatch(n, tok) for n in MATCH_NAMES)
     if any(p in tok for p in PROTECTED):

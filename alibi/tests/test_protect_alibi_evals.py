@@ -90,6 +90,12 @@ def bash(command: str) -> subprocess.CompletedProcess:
     "rm -rf alibi/team_*",
     # an ancestor of a protected path carries the whole tree away with it
     "rm -rf alibi",
+    # a variable or cd can carry a protected path into a later segment
+    "X=alibi/team_evals; rm -rf $X",
+    "X=alibi; rm -rf $X/team_evals",
+    "export D=alibi && rm -rf $D/datasets",
+    "cd alibi && rm -rf team_evals",
+    "rm -rf alibi",
     "rm -rf reference/alibi",
     "rm -rf .claude",
     "rm -rf .",
