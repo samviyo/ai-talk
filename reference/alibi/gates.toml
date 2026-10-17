@@ -1,0 +1,7 @@
+# Organiser reference gates for The Agent's Alibi: run through the alibi harness.
+#   ALIBI_TEAM_EVALS_DIR=reference/alibi uv run python -m alibi.checks
+[score_verdicts_correct]
+min = 1.0
+
+[score_receipts_correct]
+min = 1.0
