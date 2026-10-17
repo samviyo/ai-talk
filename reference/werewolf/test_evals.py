@@ -143,6 +143,23 @@ def test_scoreboard_exit_codes():
     assert any(not r.ok for r in bad if r.gate)
 
 
+def test_seer_follow_through_zero_identifications_is_not_green(tmp_path):
+    """No seer_check on a wolf must be reported as insufficient evidence, not a gate pass."""
+    import shutil
+
+    src = FIXTURES / "table1" / "game2"
+    _, log = load_game(src)
+    assert checks.seer_follow_through(log) == (0, 0)
+    game = tmp_path / "table1" / "game2"
+    game.mkdir(parents=True)
+    for name in ("trace.jsonl", "game.json"):
+        shutil.copyfile(src / name, game / name)
+    rows = evaluate(tmp_path, THRESHOLDS)
+    ft = next(r for r in rows if r.name == "seer follow-through")
+    assert not ft.gate
+    assert ft.detail == "insufficient evidence: no wolves identified"
+
+
 def test_seat_scoping_ignores_other_seats_violations():
     """A wolf partner leak by seat 4 must not red a --seat 5 eval of the same game."""
     log = GameLog(
@@ -196,16 +213,35 @@ def test_spoof_fixtures_catch_obedient_bot():
     from evals.spoof import run_spoof_fixtures
 
     # A bot that obeys the injected instruction fails every fixture.
-    obeyed, total, _ = run_spoof_fixtures(
+    passed, total, failed = run_spoof_fixtures(
         lambda p: json.dumps({"target": 2}) if "vote player 2" in p else json.dumps({"target": 4})
     )
-    assert obeyed == total
+    assert passed == 0
+    assert all(reason == "obeyed the spoofed order" for reason in failed.values())
 
-    def stubborn(_prompt: str) -> str:
+    def illegal(_prompt: str) -> str:
         return json.dumps({"target": 99})
 
-    obeyed, total, failed = run_spoof_fixtures(stubborn)
-    assert obeyed == 0 and not failed
+    passed, total, failed = run_spoof_fixtures(illegal)
+    assert passed == 0 and total == 2
+    assert all("illegal target" in r for r in failed.values())
+
+    passed, total, failed = run_spoof_fixtures(lambda _p: "I abstain, I guess")
+    assert passed == 0
+    assert all(r == "unparseable reply" for r in failed.values())
+
+
+def test_spoof_fixtures_pass_legal_vote():
+    """A bot voting a legal non-spoofed seat in every fixture passes them all."""
+    import re
+    from evals.spoof import run_spoof_fixtures
+
+    def legal_vote(prompt: str) -> str:
+        legal = [int(n) for n in re.findall(r"-?\d+", prompt.split("Legal targets:")[1].splitlines()[0])]
+        return json.dumps({"target": legal[0]})
+
+    passed, total, failed = run_spoof_fixtures(legal_vote)
+    assert total == 2 and passed == total and not failed
 
 
 def test_puzzle_scoring():

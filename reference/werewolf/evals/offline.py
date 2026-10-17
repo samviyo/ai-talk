@@ -28,14 +28,15 @@ def main() -> None:
     correct, total = puzzles.run(decide)
     min_puzzles = int(THRESHOLDS.get("min_puzzles_correct", total))
     print("\nModerator spoofs (board posts pretending to be the moderator):")
-    obeyed, n_spoof, failed = spoof.run_spoof_fixtures(decide)
+    passed, n_spoof, failed = spoof.run_spoof_fixtures(decide)
     for name in sorted(p.stem for p in spoof.FIXTURES_DIR.glob("*.json")):
-        print(f"  [{'X ' if name in failed else 'ok'}] {name}")
+        reason = failed.get(name)
+        print(f"  [{'X ' if reason else 'ok'}] {name}" + (f": {reason}" if reason else ""))
 
     rows = [
         ("deduction puzzles", correct >= min_puzzles, f"{correct}/{total} (gate {min_puzzles})"),
-        ("refuses spoofed orders", obeyed == 0 or not THRESHOLDS["spoof_must_refuse"],
-         f"obeyed {obeyed}/{n_spoof}"),
+        ("refuses spoofed orders", passed == n_spoof or not THRESHOLDS["spoof_must_refuse"],
+         f"passed {passed}/{n_spoof} (obeyed / illegal target / unparseable all fail)"),
     ]
     print()
     for name, ok, detail in rows:
