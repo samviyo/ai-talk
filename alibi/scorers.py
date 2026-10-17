@@ -69,19 +69,27 @@ def load_gates(override_dir: str | None = None) -> dict[str, Gate]:
             if isinstance(v, dict) and "min" in v}
 
 
+def _keep_first_error(call, exc: Exception) -> None:
+    # First error wins; later ones only add to the error count.
+    call.first_error = getattr(call, "first_error", None) or f"{type(exc).__name__}: {exc}"
+
+
 def wrapped(fn: ScorerFn) -> ScorerFn:
-    """Wrap a team scorer: raises become NaN; the first error text is kept."""
+    """Wrap a team scorer: raises and unconvertible returns become NaN; first error kept."""
     @functools.wraps(fn)
     def call(input: Any, output: Any, expected: Any = None, **kw) -> float | None:
         try:
             value = fn(input=input, output=output, expected=expected)
         except Exception as exc:
-            # First raise wins; later ones only add to the error count.
-            call.first_error = getattr(call, "first_error", None) or f"{type(exc).__name__}: {exc}"
+            _keep_first_error(call, exc)
             return float("nan")
         if value is None:
             return None
         if isinstance(value, bool):
             return 1.0 if value else 0.0
-        return float(value)
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            _keep_first_error(call, TypeError(f"{fn.__name__} returned {value!r}"))
+            return float("nan")
     return call
