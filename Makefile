@@ -45,7 +45,9 @@ ALIBI_DATASET_FILES = $(wildcard alibi/datasets/*.jsonl)
 lock-alibi:
 	touch alibi/team_evals/.locked
 	chmod a-w $(ALIBI_SCORER_FILES) alibi/team_evals/gates.toml $(ALIBI_DATASET_FILES)
+	chmod a-w alibi/team_evals alibi/datasets
 
 unlock-alibi:
 	chmod u+w $(ALIBI_SCORER_FILES) alibi/team_evals/gates.toml $(ALIBI_DATASET_FILES)
+	chmod u+w alibi/team_evals alibi/datasets
 	rm -f alibi/team_evals/.locked
