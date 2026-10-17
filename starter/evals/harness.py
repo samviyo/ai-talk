@@ -7,7 +7,10 @@ Vocabulary (README and HANDOFF use the same terms):
 - outcome: the final game state (GameLog: roles, events, spend, result).
 - scorer: a plain function `(input, output, expected=None, **kw) -> float | bool | None`;
   None means "not applicable" and that trial is skipped in the mean.
-- gate: a threshold on a scorer's mean in gates.toml (`[score_name] min = 0.8`, or `max`).
+- gate: a threshold on a scorer's mean in gates.toml (`[score_name] min = 0.8`, or `max`),
+  plus an optional `min_n` (default 1): a gated scorer needs at least that many applicable
+  trials or the gate is RED "insufficient evidence". Applicability is the scorer's own
+  None per row — never whether the bot produced a usable answer.
 - suite: all your scorers plus their gates. Binary 0/1 scorers are preferred.
 """
 from __future__ import annotations
@@ -76,6 +79,11 @@ def gate_ok(mean: float, g: dict) -> bool:
     return True
 
 
+def min_applicable(g: dict) -> int:
+    """A gate's min_n: few enough applicable trials is RED, not a free pass."""
+    return int(g.get("min_n", 1))
+
+
 def _wrap(fn, errors: dict[str, int]) -> object:
     """A raising scorer scores 0 (error_score) and the exception is reported."""
     def wrapped(input, output, expected=None, **kwargs):
@@ -137,22 +145,37 @@ def run_suite(views, scorers: list[tuple[str, object]], gates: dict[str, dict],
         exception = "; ".join(errors) if errors else ""
         if mean is None:
             # A raising scorer is a broken suite even if it never scores.
-            rows.append(Row(name, False if errors else None,
-                            "no applicable trials (returned None)", bool(errors),
-                            exception))
+            if errors:
+                rows.append(Row(name, False, "no applicable trials (returned None)",
+                                True, exception))
+                continue
+            gate = gates.get(name)
+            if gate:
+                rows.append(Row(name, False, _insufficient(0, gate), True))
+            else:
+                rows.append(Row(name, None, "no applicable trials (returned None)",
+                                False))
             continue
         detail = f"mean {mean:.2f} over {n} scored"
         gate = gates.get(name)
         if gate:
-            bound = ", ".join(f"{k}={gate[k]}" for k in ("min", "max") if k in gate)
-            ok = gate_ok(mean, gate) and not errors
-            rows.append(Row(name, ok, f"{detail} (gate {bound})", True, exception))
+            need = min_applicable(gate)
+            if n < need:
+                rows.append(Row(name, False, _insufficient(n, gate), True, exception))
+            else:
+                bound = ", ".join(f"{k}={gate[k]}" for k in ("min", "max") if k in gate)
+                ok = gate_ok(mean, gate) and not errors
+                rows.append(Row(name, ok, f"{detail} (gate {bound})", True, exception))
         elif errors:
             # A raising scorer is always a RED row, gate or not.
             rows.append(Row(name, False, f"{detail} (no gate)", True, exception))
         else:
             rows.append(Row(name, None, f"{detail} (no gate — shown as info)", False))
     return rows
+
+
+def _insufficient(n: int, gate: dict) -> str:
+    return f"insufficient evidence: {n} applicable trial(s), gate needs min_n={min_applicable(gate)}"
 
 
 def negative_control(scorers: list[tuple[str, object]], gates: dict[str, dict],

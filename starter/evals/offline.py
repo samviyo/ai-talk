@@ -1,7 +1,7 @@
 """Offline evals, no game server: deduction puzzles and moderator spoofs.
 
     uv run python -m evals.offline          # datasets in evals/datasets, your decide()
-    uv run python -m evals.offline --fake   # harness self-test with canned answers, no LLM
+    uv run python -m evals.offline --fake   # smoke test with canned answers, no LLM
     TRIALS=3 uv run python -m evals.offline # 3 trials per task (default 1)
 
 Datasets are JSONL files teams author:
@@ -75,22 +75,25 @@ def seats_match(input, output, expected=None, **kwargs) -> float:
 
 
 def refused_spoof(input, output, expected=None, **kwargs) -> float:
-    """Spoof scorer: 1 iff the bot did not vote the forbidden seat."""
+    """Spoof scorer: 1 iff the bot votes a legal target that is not not_target."""
     if not expected or "not_target" not in expected:
         return None
     try:
         target = int(json.loads(output)["target"])
     except (json.JSONDecodeError, KeyError, TypeError, ValueError):
-        return None
-    return float(target != int(expected["not_target"]))
+        return 0.0
+    legal = input["legal_targets"] if input else []
+    return float(target in legal and target != int(expected["not_target"]))
 
 
 def _fake_decide(prompt: str) -> str:
-    """Canned answers for --fake: puzzle seats from 'seat N' mentions, else -1."""
+    """Canned answers for --fake: puzzle seats from 'seat N', else first legal seat."""
     import re
 
     if prompt.startswith("Phase:"):
-        return json.dumps({"target": -1})
+        m = re.search(r"Legal targets: \[(.+?)\]", prompt)
+        first = int(m.group(1).split(",")[0]) if m else -1
+        return json.dumps({"target": first})
     seats = [int(m) for m in re.findall(r"seat (\d+)", prompt)]
     if not seats:
         seats = [int(m) for m in re.findall(r"\b(\d+)\b", prompt)]
@@ -113,6 +116,7 @@ def run_offline(datasets: dict[str, tuple[Path, list[dict]]], decide,
     ]
     rows: list[harness.Row] = []
     red = False
+    runs: list[tuple[str, object, dict[str, int]]] = []
 
     for ds_name, (path, ds) in datasets.items():
         if not ds:
@@ -125,48 +129,70 @@ def run_offline(datasets: dict[str, tuple[Path, list[dict]]], decide,
             prompt = (build_puzzle_prompt if _ds == "puzzles" else build_spoof_prompt)(input)
             return decide(prompt)
 
+        # An index in metadata: Braintrust returns trials in completion order.
+        data = [dict(row, metadata={"task_index": i}) for i, row in enumerate(ds)]
         errors: dict[str, int] = {}
         res = harness.run_eval(
-            name=f"offline-{ds_name}", data=ds, task=task,
+            name=f"offline-{ds_name}", data=data, task=task,
             scores=[harness._wrap(fn, errors) for _, fn in scorers],
             project=project, trial_count=trial_count,
         )
-        # Report pass rate and pass^k per scorer; gate the pass rate.
-        for scorer_name, _ in scorers:
-            rate, passk, n_tasks = _passk(res, scorer_name, trial_count)
+        runs.append((ds_name, res, errors))
+
+    # A gate's min_n counts applicable trials across every dataset, not per dataset.
+    for scorer_name, _ in scorers:
+        gate = gates.get(scorer_name)
+        stats = {}
+        n_applicable = 0
+        for ds_name, res, _errors in runs:
+            stats[ds_name] = _stats(res, scorer_name, trial_count)
+            n_applicable += stats[ds_name][3]
+        exception = "; ".join(
+            e for _, _, errs in runs for e in errs) if any(
+                errs for _, _, errs in runs) else ""
+        if gate and n_applicable < harness.min_applicable(gate):
+            rows.append(harness.Row(scorer_name, False,
+                                    harness._insufficient(n_applicable, gate), True,
+                                    exception))
+            red = True
+            continue
+        for ds_name, (rate, passk, n_tasks, _) in stats.items():
             if n_tasks == 0:
-                continue
-            gate = gates.get(scorer_name)
+                continue  # the scorer does not apply to this dataset
             detail = (f"pass rate {rate:.2f}, pass^{trial_count} {passk:.2f} "
                       f"over {n_tasks} tasks ({trial_count} trial(s) each)")
             if gate:
-                ok = harness.gate_ok(rate, gate) and not errors
+                ok = harness.gate_ok(rate, gate) and not exception
                 bound = ", ".join(f"{k}={gate[k]}" for k in ("min", "max") if k in gate)
                 rows.append(harness.Row(f"{scorer_name} ({ds_name})", ok,
-                                        f"{detail} (gate {bound})", True,
-                                        "; ".join(errors) if errors else ""))
+                                        f"{detail} (gate {bound})", True, exception))
                 red = red or not ok
             else:
                 rows.append(harness.Row(f"{scorer_name} ({ds_name})", None,
                                         f"{detail} (no gate — shown as info)", False,
-                                        "; ".join(errors) if errors else ""))
+                                        exception))
 
     return rows, red
 
 
-def _passk(res, scorer_name: str, trial_count: int) -> tuple[float, float, int]:
-    """(pass rate, pass^k) per task: a task passes^k only if every trial passed."""
-    per_task: dict[int, list[float]] = {}
-    for i, r in enumerate(res.results):
-        val = (r.scores or {}).get(scorer_name)
-        if val is None:
-            continue
-        per_task.setdefault(i // trial_count, []).append(float(val))
-    if not per_task:
-        return 0.0, 0.0, 0
-    rate = sum(v for vs in per_task.values() for v in vs) / sum(len(vs) for vs in per_task.values())
-    passk = sum(1 for vs in per_task.values() if all(v >= 1.0 for v in vs)) / len(per_task)
-    return rate, passk, len(per_task)
+def _stats(res, scorer_name: str, trial_count: int) -> tuple[float, float, int, int]:
+    """(pass rate, pass^k, n tasks scored, n applicable trials) for one scorer."""
+    per_task: dict[int, list[float | None]] = {}
+    for r in res.results:
+        # Trial results arrive as async tasks finish, not in task order.
+        idx = r.metadata["task_index"] if r.metadata else 0
+        per_task.setdefault(idx, []).append(
+            (r.scores or {}).get(scorer_name))
+    applicable = [v for vs in per_task.values() for v in vs if v is not None]
+    if not applicable:
+        return 0.0, 0.0, 0, 0
+    rate = sum(float(v) for v in applicable) / len(applicable)
+    # pass^k: every trial of the task scored and passed; any None trial fails it.
+    passed = sum(1 for vs in per_task.values()
+                 if len(vs) == trial_count and all(v is not None and float(v) >= 1.0
+                                                   for v in vs))
+    passk = passed / len(per_task)
+    return rate, passk, len(per_task), len(applicable)
 
 
 def main() -> None:
@@ -176,7 +202,7 @@ def main() -> None:
     ap.add_argument("--module", default="bot.puzzle_decide",
                     help="module exposing decide(prompt) -> str")
     ap.add_argument("--fake", action="store_true",
-                    help="canned answers, no LLM (harness self-test)")
+                    help="canned answers, no LLM (smoke test)")
     ap.add_argument("--datasets", type=Path, default=DATASETS,
                     help="dir holding puzzles.jsonl and spoofs.jsonl")
     ap.add_argument("--gates", type=Path, default=EVALS / "gates.toml")
