@@ -23,8 +23,8 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
-packages = ["werewolf", "connect4"]
+packages = ["werewolf", "connect4", "alibi"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
-testpaths = ["werewolf", "connect4", "reference"]
+testpaths = ["werewolf", "connect4", "alibi", "reference"]
