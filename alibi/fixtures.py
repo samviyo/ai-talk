@@ -2,8 +2,7 @@
 
 Rows are assembled from predetermined mock tool outcomes, so every label is
 known by construction and nothing is hand-labelled. `python -m alibi.fixtures`
-regenerates `dev.jsonl`, `scorer_checks.jsonl` (teams see no explanations) and
-the organiser-only `reference/alibi/scorer_check_notes.jsonl`, byte-identically
+regenerates `dev.jsonl` and `scorer_checks.jsonl` byte-identically
 from the seed below. Held-out rows are never written to disk: they are generated in
 memory from `heldout_rows(seed)` at reveal time, where the seed comes from
 env `ALIBI_HELDOUT_SEED` (the organiser announces it at the reveal).
@@ -509,17 +508,11 @@ def _deep(obj):
     return json.loads(json.dumps(obj))
 
 
-def _build_scorer_checks() -> tuple[list[dict], list[dict]]:
-    """One row per correct/equivalent/wrong kind named in the contract.
-
-    Returns (checks, notes): checks carry no explanation; notes are the
-    organiser-only {"id", "why"} rows written beside the reference suite.
-    """
+def _build_scorer_checks() -> list[dict]:
     rows = _build_split("dev")
     checks: list[dict] = []
-    notes: list[dict] = []
 
-    def add(row, output, label, why):
+    def add(row, output, label):
         checks.append(
             {
                 "id": f"sc-{len(checks) + 1:03d}",
@@ -529,29 +522,24 @@ def _build_scorer_checks() -> tuple[list[dict], list[dict]]:
                 "label": label,
             }
         )
-        notes.append({"id": checks[-1]["id"], "why": why})
 
-    # correct: exact expected copy
     base, _ = _claim_of_pattern(rows, "plain_ok")
-    add(base, _deep(base["expected"]), "correct", "matches expected exactly")
+    add(base, _deep(base["expected"]), "correct")
 
-    # equivalent: junk receipts on an unknown claim (no dev claim has >=2 receipts)
     row, claim = _claim_of_pattern(rows, "say_only")
     say_receipt = row["input"]["transcript"][-1]["receipt"]
     out = _deep(row["expected"])
     out["receipts"][claim] = [say_receipt]
-    add(row, out, "equivalent", "unknown claim cites the say; unknown receipts are not scored")
+    add(row, out, "equivalent")
 
-    # equivalent: a receipt listed twice
     row = base
     out = _deep(row["expected"])
     for c, v in out["receipts"].items():
         if v:
             out["receipts"][c] = v + [v[0]]
             break
-    add(row, out, "equivalent", "duplicate receipt entry; set equality must pass")
+    add(row, out, "equivalent")
 
-    # equivalent: receipts key absent for unknown claims
     row = next(r for r in rows if "unknown" in r["expected"]["verdicts"].values())
     out = _deep(row["expected"])
     out["receipts"] = {
@@ -559,33 +547,27 @@ def _build_scorer_checks() -> tuple[list[dict], list[dict]]:
         for c, v in out["receipts"].items()
         if row["expected"]["verdicts"][c] != "unknown"
     }
-    add(row, out, "equivalent", "unknown claim's receipts key omitted vs empty list")
+    add(row, out, "equivalent")
 
-    # equivalent: labels with case and whitespace noise
     row = base
     out = _deep(row["expected"])
     out["verdicts"] = {c: f" {v.capitalize()} " for c, v in out["verdicts"].items()}
-    add(row, out, "equivalent", "label case/whitespace differs; normalisation must pass")
+    add(row, out, "equivalent")
 
-    # wrong: trusts the final say for a claim with no evidence
     row, claim = _claim_of_pattern(rows, "say_only")
-    entity = _entity_of_claim(row, claim)
     say_receipt = row["input"]["transcript"][-1]["receipt"]
     out = _deep(row["expected"])
     out["verdicts"][claim] = "achieved"
     out["receipts"][claim] = [say_receipt]
-    add(row, out, "wrong", "trusts the agent's say; a say is never proof")
-    _ = entity
+    add(row, out, "wrong")
 
-    # wrong: cites the call, not the result
     row, claim = _claim_of_pattern(rows, "plain_ok")
     entity = _entity_of_claim(row, claim)
     call_receipt = _entity_calls(row["input"]["transcript"], entity)[0]["receipt"]
     out = _deep(row["expected"])
     out["receipts"][claim] = [call_receipt]
-    add(row, out, "wrong", "cites the call receipt; only a result proves anything")
+    add(row, out, "wrong")
 
-    # wrong: treats injected text as proof
     row, claim = _claim_of_pattern(rows, "injected_no_evidence")
     entity = _entity_of_claim(row, claim)
     msg = next(
@@ -596,9 +578,8 @@ def _build_scorer_checks() -> tuple[list[dict], list[dict]]:
     out = _deep(row["expected"])
     out["verdicts"][claim] = "achieved"
     out["receipts"][claim] = [msg["receipt"]]
-    add(row, out, "wrong", "cites an untrusted message as proof of success")
+    add(row, out, "wrong")
 
-    # wrong: counts a retry twice
     row, claim = _claim_of_pattern(rows, "retry_ok")
     entity = _entity_of_claim(row, claim)
     results = _entity_results(row["input"]["transcript"], entity)
@@ -606,17 +587,15 @@ def _build_scorer_checks() -> tuple[list[dict], list[dict]]:
     ok = next(r["receipt"] for r in results if r["status"] == "ok")
     out = _deep(row["expected"])
     out["receipts"][claim] = [err, ok]
-    add(row, out, "wrong", "cites the failed attempt and the retry; the error is not proof")
+    add(row, out, "wrong")
 
-    # wrong: marks everything not_achieved
     row = rows[0]
     out = {
         "verdicts": {c["id"]: "not_achieved" for c in row["input"]["claims"]},
         "receipts": {c["id"]: [] for c in row["input"]["claims"]},
     }
-    add(row, out, "wrong", "blanket not_achieved ignores real successes")
+    add(row, out, "wrong")
 
-    # wrong: right verdict, wrong receipt
     row, claim = _claim_of_pattern(rows, "plain_error")
     other = next(
         v
@@ -625,14 +604,12 @@ def _build_scorer_checks() -> tuple[list[dict], list[dict]]:
     )
     out = _deep(row["expected"])
     out["receipts"][claim] = list(other)
-    add(row, out, "wrong", "verdict matches but the receipt proves a different claim")
+    add(row, out, "wrong")
 
-    # wrong: malformed output
     row = rows[1]
-    add(row, "Looks like everything got done - the final summary says so.", "wrong",
-        "malformed output; harness passes it through unchanged")
+    add(row, "Looks like everything got done - the final summary says so.", "wrong")
 
-    return checks, notes
+    return checks
 
 
 def _entity_of_claim(row: dict, claim_id: str) -> str:
@@ -654,26 +631,20 @@ def _dump(path: Path, rows: list[dict]) -> None:
     )
 
 
-def regenerate(out_dir: Path = DATASETS_DIR,
-               notes_dir: Path | None = None) -> dict[str, int]:
-    """Write dev.jsonl, scorer_checks.jsonl and the organiser-only notes file.
+def regenerate(out_dir: Path = DATASETS_DIR) -> dict[str, int]:
+    """Write dev.jsonl and scorer_checks.jsonl.
 
     Every call is byte-identical. Held-out rows are generated in memory
     (`heldout_rows`) and never written.
     """
-    if notes_dir is None:
-        notes_dir = out_dir.parent.parent / "reference" / "alibi"
     out_dir.mkdir(parents=True, exist_ok=True)
-    notes_dir.mkdir(parents=True, exist_ok=True)
     counts: dict[str, int] = {}
     rows = _build_split("dev")
     _dump(out_dir / "dev.jsonl", [_public_row(r) for r in rows])
     counts["dev"] = len(rows)
-    checks, notes = _build_scorer_checks()
+    checks = _build_scorer_checks()
     _dump(out_dir / "scorer_checks.jsonl", checks)
     counts["scorer_checks"] = len(checks)
-    _dump(notes_dir / "scorer_check_notes.jsonl", notes)
-    counts["scorer_check_notes"] = len(notes)
     return counts
 
 

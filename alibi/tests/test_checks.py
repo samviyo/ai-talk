@@ -193,3 +193,25 @@ def test_gate_min_boundary_on_wrong_row():
     wrong = [_row("w1", {"verdicts": {}, "receipts": {}}, "wrong", "edge")]
     failures = checks.run_checks([scorer], gates, wrong, print_rows=False)
     assert any("no gated scorer fails" in f for f in failures), failures
+
+
+NOTES_PATH = (Path(__file__).resolve().parent.parent / "datasets").parent.parent \
+    / "reference" / "alibi" / "scorer_check_notes.jsonl"
+
+
+def _note_whys():
+    return [
+        json.loads(line)["why"]
+        for line in NOTES_PATH.read_text().splitlines()
+        if line
+    ]
+
+
+def test_check_output_never_prints_note_texts(team_scorers, capsys):
+    _install_scorers(team_scorers, GOOD_SCORERS, GOOD_GATES)
+    rows = checks.load_check_rows(checks.CHECKS_PATH)
+    checks.run_checks(load_scorers(), load_gates(), rows, print_rows=True)
+    out = capsys.readouterr().out
+    assert "sc-001" in out  # rows were actually printed
+    for why in _note_whys():
+        assert why not in out, why
