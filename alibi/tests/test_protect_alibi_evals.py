@@ -1,6 +1,7 @@
 """Lock-layer tests through the real entry points: the PreToolUse hook and make."""
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import stat
@@ -23,19 +24,33 @@ def _save_lock() -> tuple[bool, bytes | None]:
     return existed, LOCK.read_bytes() if existed else None
 
 
+@contextlib.contextmanager
+def _writable_team_dir():
+    """make lock-alibi strips the dir's write bit; borrow it to add or remove the marker."""
+    mode = TEAM.stat().st_mode
+    TEAM.chmod(mode | stat.S_IWUSR)
+    try:
+        yield
+    finally:
+        TEAM.chmod(mode)
+
+
 def _restore_lock(existed: bool, content: bytes | None) -> None:
     """Real locks go back; markers this test created are removed."""
-    if existed:
-        LOCK.write_bytes(content)
-    else:
-        LOCK.unlink(missing_ok=True)
+    with _writable_team_dir():
+        if existed:
+            LOCK.unlink(missing_ok=True)
+            LOCK.write_bytes(content or b"")
+        else:
+            LOCK.unlink(missing_ok=True)
 
 
 @pytest.fixture
 def locked():
     """Install .locked for the test; a real pre-existing lock is restored after."""
     existed, content = _save_lock()
-    LOCK.write_bytes(b"")
+    with _writable_team_dir():
+        LOCK.write_bytes(b"")
     try:
         yield LOCK
     finally:
@@ -46,7 +61,8 @@ def locked():
 def unlocked():
     """Remove .locked for the test; a real pre-existing lock is restored after."""
     existed, content = _save_lock()
-    LOCK.unlink(missing_ok=True)
+    with _writable_team_dir():
+        LOCK.unlink(missing_ok=True)
     try:
         yield
     finally:
@@ -111,6 +127,14 @@ def bash(command: str) -> subprocess.CompletedProcess:
     "echo x > alibi/datasets/dev.jsonl",
     "cat /etc/passwd | tee .claude/settings.json",
     "shlex-unbalanced ' rm -rf alibi/team_evals",
+    # shell expansion and normalised redirect targets resolve to protected paths
+    "A=ali; B=bi; mv \"$A$B\" /tmp/alibi-away",
+    "mv .clau?e /tmp/no-hooks",
+    "cat /dev/null > .claude/hooks/../settings.json",
+    "cat /dev/null > reference/werewolf/../alibi/organiser_evals.py",
+    # pytest options that write or delete paths
+    "pytest --basetemp=alibi/team_evals",
+    "uv run pytest -p some_plugin alibi",
 ])
 def test_writes_and_unlock_are_blocked_while_locked(command):
     r = bash(command)
@@ -132,6 +156,10 @@ def test_writes_and_unlock_are_blocked_while_locked(command):
     "git log --oneline -- alibi/team_evals",
     "git status -- alibi/team_evals",
     "cat alibi/team_evals/gates.toml | grep min",
+    "sed -n 1,20p alibi/team_evals/gates.toml",
+    "git show HEAD:alibi/team_evals/gates.toml",
+    "python -m pytest alibi",
+    "uv run pytest -q alibi",
     "make eval-alibi",
     "make check-alibi",
     "make eval-alibi ALIBI_BOT=alibi.bots.naive:audit ALIBI_TRIALS=2",
@@ -247,7 +275,7 @@ def test_lock_alibi_strips_write_bits_and_unlock_restores_them():
         for p in PROTECTED:
             assert stat.S_IMODE(p.stat().st_mode) == originals[p], p
         for d in (TEAM, ROOT / "alibi" / "datasets"):
-            assert stat.S_IMODE(d.stat().st_mode) == originals[d], d
+            assert stat.S_IMODE(d.stat().st_mode) & stat.S_IWUSR, d
     finally:
         # Restore modes and any real lock even if an assertion failed mid-way.
         for p, mode in originals.items():

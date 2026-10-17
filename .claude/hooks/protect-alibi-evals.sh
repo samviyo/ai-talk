@@ -11,7 +11,7 @@ locked="$root/alibi/team_evals/.locked"
 
 # read -d '' instead of $(): the checker's regexes contain $() and backticks.
 read -r -d '' checker <<'PY' || true
-import fnmatch, json, os, re, shlex, sys
+import fnmatch, glob, json, os, re, shlex, sys
 
 root = os.path.abspath(sys.argv[1])
 try:
@@ -57,15 +57,16 @@ for n in list(MATCH_NAMES):
     for i in range(1, len(parts)):
         MATCH_NAMES.add("/".join(parts[i:]))
 
-READ_ONLY = re.compile(r"^(cat|less|head|tail|grep|rg|ls|wc|diff)(\s|$)")
-GIT_RO = re.compile(r"^git\s+(diff|log|status)(\s|$)")
+READ_ONLY = re.compile(r"^(cat|less|head|tail|grep|rg|ls|wc|diff|sed\s+-n)(\s|$)")
+GIT_RO = re.compile(r"^git\s+(diff|log|status|show)(\s|$)")
 MAKE_EVAL = re.compile(r"^make(\s+-\w+)*\s+(eval-alibi|check-alibi)(\s+[\w./:=+-]+)*(\s|$)")
 PY_EVAL = re.compile(r"^(uv\s+run\s+)?python3?\s+-m\s+alibi\.(evals|checks)(\s+[\w./:=+-]+)*(\s|$)")
-PYTEST = re.compile(r"^(uv\s+run\s+)?pytest(\s+[\w./:=+-]+)*(\s|$)")
+# Only plain flags: --basetemp, -p, -c, -o and friends can write or delete paths.
+PYTEST = re.compile(r"^(uv\s+run\s+)?(python3?\s+-m\s+)?pytest"
+                    r"(\s+(-q|-v|-vv|-x|-s|--lf|--ff|[\w./:\[\]-]+(?<!=)))*\s*$")
 SUBST = re.compile(r"\$\(|`|<\(|>\(")
-SPICY_ARGS = re.compile(r"(--output|--pre)(=|\s)")
-REDIRECT_PROT = re.compile(
-    r">>?\s*\S*(" + "|".join(re.escape(p) for p in PROTECTED) + r")(/|$)")
+SPICY_ARGS = re.compile(r"(--output|--pre|\s-i)(=|\s|$)|(^|\s)-[pco]\s|--basetemp|--rootdir")
+REDIRECT = re.compile(r"\d*&?>>?\|?\s*([^\s;&|<>]+)")
 
 
 def blocked():
@@ -90,7 +91,12 @@ def token_touches(tok):
     if "=" in tok and token_touches(tok.split("=", 1)[1]):
         return True  # X=alibi or --dir=alibi can carry a protected path into a later $X
     if any(c in tok for c in "*?["):
-        return any(fnmatch.fnmatch(n, tok) for n in MATCH_NAMES)
+        if any(fnmatch.fnmatch(n, tok) for n in MATCH_NAMES):
+            return True
+        # Expand against the real tree too: .clau?e names no protected path but matches .claude.
+        return any(touches_abs(os.path.normpath(m))
+                   for base in (cwd, root)
+                   for m in glob.glob(os.path.join(base, os.path.expanduser(tok))))
     if any(p in tok for p in PROTECTED):
         return True  # e.g. python -c "open('alibi/team_evals/x','w')"
     if tok.startswith("~"):
@@ -111,6 +117,10 @@ def seg_tokens(segment):
 def segment_touches(segment):
     if any(p in squash(segment) for p in PROTECTED):
         return True
+    if "$" in segment:
+        return True  # a variable can expand to any path, so only reads may use one
+    if any(token_touches(t.strip("'\"")) for t in REDIRECT.findall(segment)):
+        return True
     toks = seg_tokens(segment)
     if toks is None:
         return True
@@ -123,8 +133,8 @@ def ok(segment):
         return False  # substitution can hide a write behind a read verb
     if SPICY_ARGS.search(segment):
         return False  # e.g. git diff --output=..., rg --pre=...
-    if REDIRECT_PROT.search(squash(segment)):
-        return False  # redirecting into protected state is a write
+    if any(token_touches(t.strip("'\"")) for t in REDIRECT.findall(segment)):
+        return False  # redirecting into protected state is a write, however the path is spelled
     if seg_tokens(segment) is None:
         return False
     return bool(READ_ONLY.match(segment) or GIT_RO.match(segment)

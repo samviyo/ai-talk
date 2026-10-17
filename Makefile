@@ -32,9 +32,12 @@ eval-alibi:
 
 ALIBI_REFERENCE_DIR ?= reference/alibi
 
+# Both legs always run: a RED team suite must not hide the organiser's verdict.
 reveal-alibi:
-	uv run python -m alibi.evals --bot $(ALIBI_BOT) --split $(ALIBI_SPLIT) --trials $(ALIBI_TRIALS) --heldout
-	uv run python -m alibi.evals --bot $(ALIBI_BOT) --split heldout --trials $(ALIBI_TRIALS) --team-evals-dir $(ALIBI_REFERENCE_DIR)
+	@rc=0; \
+	uv run python -m alibi.evals --bot $(ALIBI_BOT) --split $(ALIBI_SPLIT) --trials $(ALIBI_TRIALS) --heldout || rc=1; \
+	uv run python -m alibi.evals --bot $(ALIBI_BOT) --split heldout --trials $(ALIBI_TRIALS) --team-evals-dir $(ALIBI_REFERENCE_DIR) || rc=1; \
+	exit $$rc
 
 check-alibi:
 	uv run python -m alibi.checks
@@ -46,6 +49,7 @@ ALIBI_SCORER_FILES = $(wildcard alibi/team_evals/*.py)
 ALIBI_DATASET_FILES = $(wildcard alibi/datasets/*.jsonl)
 
 lock-alibi:
+	chmod u+w alibi/team_evals
 	touch alibi/team_evals/.locked
 	chmod a-w $(ALIBI_SCORER_FILES) alibi/team_evals/gates.toml $(ALIBI_DATASET_FILES)
 	chmod a-w alibi/team_evals alibi/datasets
