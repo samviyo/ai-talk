@@ -346,3 +346,12 @@ def test_offline_cli_passk_not_inflated_by_none_trials(tmp_path):
     line = next(l for l in proc.stdout.splitlines() if "refused_spoof" in l)
     assert "RED" in line
     assert proc.returncode == 1, proc.stdout
+
+
+def test_insufficient_evidence_on_negctl_does_not_count_as_caught(tmp_path):
+    """Practice has enough trials for min_n but the negctl bot does not: that is not a catch."""
+    write_scorer(tmp_path, always_one_scorer())
+    (tmp_path / "gates.toml").write_text("[score_all_good]\nmin = 0.8\nmin_n = 10\n")
+    proc = run_cli(["-m", "evals", "--runs", str(TABLE1),
+                    "--scorers", str(tmp_path), "--gates", str(tmp_path / "gates.toml")])
+    assert proc.returncode == 1, proc.stdout

@@ -57,15 +57,18 @@ for n in list(MATCH_NAMES):
     for i in range(1, len(parts)):
         MATCH_NAMES.add("/".join(parts[i:]))
 
-READ_ONLY = re.compile(r"^(cat|less|head|tail|grep|rg|ls|wc|diff|sed\s+-n)(\s|$)")
+READ_ONLY = re.compile(r"^(cat|less|head|tail|grep|rg|ls|wc|diff)(\s|$)")
+# Line-range printing only: sed's w command and -i both write files.
+SED_RO = re.compile(r"""^sed\s+-n\s+'?\d+(,(\d+|\$))?p'?(\s+[^\s'"-][^\s'"]*)+\s*$""")
 GIT_RO = re.compile(r"^git\s+(diff|log|status|show)(\s|$)")
-MAKE_EVAL = re.compile(r"^make(\s+-\w+)*\s+(eval-alibi|check-alibi)(\s+[\w./:=+-]+)*(\s|$)")
-PY_EVAL = re.compile(r"^(uv\s+run\s+)?python3?\s+-m\s+alibi\.(evals|checks)(\s+[\w./:=+-]+)*(\s|$)")
-# Only plain flags: --basetemp, -p, -c, -o and friends can write or delete paths.
-PYTEST = re.compile(r"^(uv\s+run\s+)?(python3?\s+-m\s+)?pytest"
-                    r"(\s+(-q|-v|-vv|-x|-s|--lf|--ff|[\w./:\[\]-]+(?<!=)))*\s*$")
+ENV = r"^(\w+=\S*\s+)*"  # e.g. ALIBI_HELDOUT_SEED=$seed make eval-alibi
+MAKE_EVAL = re.compile(ENV + r"make(\s+-\w+)*\s+(eval-alibi|check-alibi)(\s+[\w./:=+-]+)*(\s|$)")
+PY_EVAL = re.compile(ENV + r"(uv\s+run\s+)?python3?\s+-m\s+alibi\.(evals|checks)(\s+[\w./:=+-]+)*(\s|$)")
+# Allowlisted flags only: --basetemp, --junitxml, -p, -c, -o and friends can write paths.
+PYTEST = re.compile(ENV + r"(uv\s+run\s+)?(python3?\s+-m\s+)?pytest"
+                    r"(\s+(-q|-v|-vv|-x|-s|--lf|--ff|[\w./:\[\]][\w./:\[\]-]*))*\s*$")
 SUBST = re.compile(r"\$\(|`|<\(|>\(")
-SPICY_ARGS = re.compile(r"(--output|--pre|\s-i)(=|\s|$)|(^|\s)-[pco]\s|--basetemp|--rootdir")
+SPICY_ARGS = re.compile(r"(--output|--pre)(=|\s)")
 REDIRECT = re.compile(r"\d*&?>>?\|?\s*([^\s;&|<>]+)")
 
 
@@ -133,11 +136,14 @@ def ok(segment):
         return False  # substitution can hide a write behind a read verb
     if SPICY_ARGS.search(segment):
         return False  # e.g. git diff --output=..., rg --pre=...
-    if any(token_touches(t.strip("'\"")) for t in REDIRECT.findall(segment)):
+    targets = REDIRECT.findall(segment)
+    if any(token_touches(t.strip("'\"")) for t in targets):
         return False  # redirecting into protected state is a write, however the path is spelled
+    if any(c in t for t in targets for c in "$*?["):
+        return False  # an expanded redirect target can't be resolved here, so it is never a read
     if seg_tokens(segment) is None:
         return False
-    return bool(READ_ONLY.match(segment) or GIT_RO.match(segment)
+    return bool(READ_ONLY.match(segment) or SED_RO.match(segment) or GIT_RO.match(segment)
                 or MAKE_EVAL.match(segment) or PY_EVAL.match(segment)
                 or PYTEST.match(segment))
 

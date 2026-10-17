@@ -186,8 +186,9 @@ def negative_control(scorers: list[tuple[str, object]], gates: dict[str, dict],
     data = game_views(NEGCTL)
     rows = run_suite(data, scorers, gates, "negctl", project=project)
     broken = [r for r in rows if r.exception]
-    # Only clean gate failures on the bad bot count as "caught".
-    live = any(r.gate and r.ok is False and not r.exception for r in rows)
+    # Only clean gate failures count as caught; an insufficient-evidence gate measured nothing.
+    live = any(r.gate and r.ok is False and not r.exception
+               and not r.detail.startswith("insufficient evidence") for r in rows)
     for r in rows:
         r.name = f"negctl: {r.name}"
         if live:

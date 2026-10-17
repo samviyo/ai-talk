@@ -135,6 +135,10 @@ def bash(command: str) -> subprocess.CompletedProcess:
     # pytest options that write or delete paths
     "pytest --basetemp=alibi/team_evals",
     "uv run pytest -p some_plugin alibi",
+    "pytest --junitxml .claude/settings.json alibi",
+    "sed -n 'w .claude/settings.json' /dev/null",
+    "sed -n -i.bak 's/.*/x/' .claude/settings.json",
+    "cat /dev/null > \"$PWD\"/.clau?e/settings.json",
 ])
 def test_writes_and_unlock_are_blocked_while_locked(command):
     r = bash(command)
@@ -157,6 +161,12 @@ def test_writes_and_unlock_are_blocked_while_locked(command):
     "git status -- alibi/team_evals",
     "cat alibi/team_evals/gates.toml | grep min",
     "sed -n 1,20p alibi/team_evals/gates.toml",
+    "sed -n '1,$p' alibi/team_evals/gates.toml",
+    "grep -i min alibi/team_evals/gates.toml",
+    "rg -i min alibi/team_evals/gates.toml",
+    "git log -p -- alibi/team_evals",
+    "ALIBI_HELDOUT_SEED=$seed make eval-alibi",
+    "ALIBI_HELDOUT_SEED=7 uv run python -m alibi.evals --split heldout",
     "git show HEAD:alibi/team_evals/gates.toml",
     "python -m pytest alibi",
     "uv run pytest -q alibi",
