@@ -7,6 +7,10 @@
           {
             "type": "command",
             "command": "bash .claude/hooks/protect-team-evals.sh"
+          },
+          {
+            "type": "command",
+            "command": "bash .claude/hooks/protect-alibi-evals.sh"
           }
         ]
       }
