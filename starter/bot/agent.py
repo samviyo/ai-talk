@@ -152,13 +152,6 @@ def parse_opener(text: str, alive: list[int], seat: int,
             seat_or_none(data.get("second")))
 
 
-def fallback_nominee(alive: list[int], seat: int, day: int,
-                     partners: list[int] | None = None) -> int | None:
-    """Seat-seeded pick so an empty board still reaches a vote."""
-    pool = [s for s in alive if s != seat and s not in (partners or [])]
-    return pool[(seat * 7 + day) % len(pool)] if pool else None
-
-
 def parse_target(text: str, legal_targets: list[int]) -> int | None:
     """Extract a legal target seat from the model's reply; None to abstain."""
     try:
