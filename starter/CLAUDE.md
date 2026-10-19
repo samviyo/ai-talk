@@ -8,7 +8,8 @@ You're helping a team build an LLM Werewolf bot. `README.md` covers the game, th
 - `bot/` — the agent. `agent.py` holds prompts and decision logic; `config.toml` picks models
   (only models in the server's `prices.toml`; `max_tokens` is required).
 - `evals/` — the harness (`harness.py`, `offline.py`, `practice.py`) plus the team's suite:
-  scorers in `evals/scorers/*.py`, gates in `evals/gates.toml`, datasets in `evals/datasets/*.jsonl`.
+  game scorers in `evals/scorers/*.py`, offline scorers in `evals/scorers/offline/*.py`, gates in
+  `evals/gates.toml`, datasets in `evals/datasets/*.jsonl`. No scorers ship; the team writes them all.
 - `tests/` — harness tests and fixture transcripts, including the negative control in `tests/fixtures/runs/negctl/`.
 
 ## Commands

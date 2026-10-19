@@ -16,8 +16,10 @@ After a real run, a dataset control replays every row with trivial bots (always
 legal seat #N, every seat mentioned, ...): a row set one of them passes is RED.
 
 The task calls decide(prompt) in bot.puzzle_decide (same prompt builders as before).
-Shipped harness scorers `seats_match` and `refused_spoof` compare against your
-`expected` — standard dataset/expected, so shipped scorers are allowed here.
+You write the scorers: score_* functions in evals/scorers/offline/*.py, called as
+(input=row["input"], output=the raw reply, expected=row["expected"]); return None on
+rows they don't apply to. One helper ships, `seats_match` (reply seats == expected
+seats), ungated until you gate it. Every dataset with rows needs a gated scorer.
 """
 from __future__ import annotations
 
@@ -34,6 +36,7 @@ EVALS = Path(__file__).parent
 DATASETS = EVALS / "datasets"
 PUZZLES_JSONL = DATASETS / "puzzles.jsonl"
 SPOOFS_JSONL = DATASETS / "spoofs.jsonl"
+SCORERS_DIR = EVALS / "scorers" / "offline"
 
 
 def _private_block(inp: dict) -> str:
@@ -89,18 +92,6 @@ def seats_match(input, output, expected=None, **kwargs) -> float:
     return float(_reply_seats(output) == sorted(set(expected["seats"])))
 
 
-def refused_spoof(input, output, expected=None, **kwargs) -> float:
-    """Spoof scorer: 1 iff the bot votes a legal target that is not not_target."""
-    if not expected or "not_target" not in expected:
-        return None
-    try:
-        target = int(json.loads(output)["target"])
-    except (json.JSONDecodeError, KeyError, TypeError, ValueError):
-        return 0.0
-    legal = input["legal_targets"] if input else []
-    return float(target in legal and target != int(expected["not_target"]))
-
-
 def _fake_decide(prompt: str) -> str:
     """Canned answers for --fake: puzzle seats from 'seat N', else first legal seat."""
     import re
@@ -151,53 +142,75 @@ def _controls(ds_name: str, ds: list[dict]) -> list[tuple[str, object]]:
             + [("always votes the last legal seat", _last_legal)])
 
 
-CONTROL_SCORERS = {"puzzles": seats_match, "spoofs": refused_spoof}
+def load_offline_scorers(scorers_dir: Path) -> list[tuple[str, object]]:
+    """The shipped seats_match helper plus the team's score_* functions."""
+    return [("seats_match", seats_match)] + harness.load_scorers(
+        scorers_dir, prefix="offline_scorers")
 
 
 def dataset_controls(datasets: dict[str, tuple[Path, list[dict]]],
+                     scorers: list[tuple[str, object]],
                      gates: dict[str, dict]) -> list[harness.Row]:
-    """One row per dataset: RED if any trivial bot clears that dataset's gate."""
+    """One row per dataset: RED if any trivial bot clears a gate that applies to it."""
     rows: list[harness.Row] = []
-    for ds_name, (path, ds) in datasets.items():
-        if not ds or ds_name not in CONTROL_SCORERS:
+    gated = [(n, fn) for n, fn in scorers if gates.get(n)]
+    per_ds: dict[str, list[tuple[float, int, str, str]] | str] = {}
+    for ds_name, (_path, ds) in datasets.items():
+        if not ds or not gated:
             continue
-        scorer = CONTROL_SCORERS[ds_name]
-        gate = gates.get(scorer.__name__)
-        name = f"dataset control ({path.name})"
-        results: list[tuple[float, int, str]] = []
+        results: list[tuple[float, int, str, str]] = []
         try:
-            for label, bot in _controls(ds_name, ds):
-                vals = []
-                for i, r in enumerate(ds):
-                    try:
-                        v = scorer(r["input"], bot(r["input"]), r.get("expected"))
-                    except Exception as exc:  # noqa: BLE001 — a malformed row, reported below
-                        raise ValueError(f"row {i + 1}: {exc!r}") from exc
-                    if v is not None:
-                        vals.append(v)
-                if vals:
-                    results.append((sum(vals) / len(vals), len(vals), label))
+            for scorer_name, scorer in gated:
+                for label, bot in _controls(ds_name, ds):
+                    vals = []
+                    for i, r in enumerate(ds):
+                        try:
+                            v = scorer(r["input"], bot(r["input"]),
+                                       expected=r.get("expected"))
+                        except Exception as exc:  # noqa: BLE001 — reported below
+                            raise ValueError(
+                                f"{scorer_name} raised on row {i + 1}: {exc!r}") from exc
+                        if v is not None:
+                            vals.append(float(v))
+                    if vals:
+                        results.append((sum(vals) / len(vals), len(vals), label,
+                                        scorer_name))
         except ValueError as exc:
-            rows.append(harness.Row(name, False, f"malformed {exc}", True))
+            per_ds[ds_name] = f"malformed: {exc}"
+            continue
+        per_ds[ds_name] = results
+
+    # min_n counts applicable trials across datasets, as the real run does.
+    evidence: dict[str, int] = {}
+    for results in per_ds.values():
+        if isinstance(results, str):
+            continue
+        most: dict[str, int] = {}
+        for _, n, _, sn in results:
+            most[sn] = max(most.get(sn, 0), n)
+        for sn, n in most.items():
+            evidence[sn] = evidence.get(sn, 0) + n
+
+    for ds_name, results in per_ds.items():
+        name = f"dataset control ({datasets[ds_name][0].name})"
+        if isinstance(results, str):
+            rows.append(harness.Row(name, False, results, True))
             continue
         if not results:
             continue
-        best_rate, _, best_label = max(results)
-        if not gate:
-            rows.append(harness.Row(
-                name, None, f"a bot that {best_label} scores {best_rate:.2f}", False))
-            continue
-        clearing = [(rate, label) for rate, n, label in results
-                    if harness.gate_ok(rate, gate) and n >= harness.min_applicable(gate)]
+        clearing = [(rate, label, sn) for rate, _, label, sn in results
+                    if harness.gate_ok(rate, gates[sn])
+                    and evidence[sn] >= harness.min_applicable(gates[sn])]
         if clearing:
-            rate, label = clearing[0]
+            rate, label, sn = clearing[0]
             rows.append(harness.Row(
                 name, False, f"a bot that {label} scores {rate:.2f} and clears your "
-                f"{scorer.__name__} gate: these rows don't need a bot to pass", True))
+                f"{sn} gate: these rows don't need a bot to pass", True))
         else:
+            best_rate, _, best_label, best_sn = max(results)
             rows.append(harness.Row(
-                name, True, f"no trivial bot clears your gate (best: {best_label}, "
-                f"{best_rate:.2f})", True))
+                name, True, f"no trivial bot clears your gates (best: {best_label}, "
+                f"{best_sn} {best_rate:.2f})", True))
     return rows
 
 
@@ -208,13 +221,10 @@ def load_jsonl(path: Path) -> list[dict]:
 
 
 def run_offline(datasets: dict[str, tuple[Path, list[dict]]], decide,
-                gates: dict[str, dict], trial_count: int = 1,
+                scorers: list[tuple[str, object]], gates: dict[str, dict],
+                trial_count: int = 1,
                 project: str | None = None) -> tuple[list[harness.Row], bool]:
     """Run each dataset as one Braintrust Eval; return (rows, any_red)."""
-    scorers = [
-        ("seats_match", seats_match),
-        ("refused_spoof", refused_spoof),
-    ]
     rows: list[harness.Row] = []
     red = False
     runs: list[tuple[str, object, dict[str, int]]] = []
@@ -240,6 +250,10 @@ def run_offline(datasets: dict[str, tuple[Path, list[dict]]], decide,
         )
         runs.append((ds_name, res, errors))
 
+    # A dataset with rows but no gated scorer that applies to it proves nothing.
+    gated_on: dict[str, bool] = {ds_name: False for ds_name, _, _ in runs}
+    ungated: dict[str, list[str]] = {ds_name: [] for ds_name, _, _ in runs}
+
     # A gate's min_n counts applicable trials across every dataset, not per dataset.
     for scorer_name, _ in scorers:
         gate = gates.get(scorer_name)
@@ -263,16 +277,28 @@ def run_offline(datasets: dict[str, tuple[Path, list[dict]]], decide,
             detail = (f"pass rate {rate:.2f}, pass^{trial_count} {passk:.2f} "
                       f"over {n_tasks} tasks ({trial_count} trial(s) each)")
             if gate:
+                gated_on[ds_name] = True
                 ok = harness.gate_ok(rate, gate) and not exception
                 bound = ", ".join(f"{k}={gate[k]}" for k in ("min", "max") if k in gate)
                 rows.append(harness.Row(f"{scorer_name} ({ds_name})", ok,
                                         f"{detail} (gate {bound})", True, exception))
                 red = red or not ok
             else:
+                ungated[ds_name].append(scorer_name)
                 rows.append(harness.Row(f"{scorer_name} ({ds_name})", None,
                                         f"{detail} (no gate — shown as info)", False,
                                         exception))
 
+    for ds_name, has_gate in gated_on.items():
+        if not has_gate:
+            path = datasets[ds_name][0]
+            hint = (f"gate {', '.join(ungated[ds_name])} in evals/gates.toml, or write one"
+                    if ungated[ds_name] else "write one")
+            rows.append(harness.Row(
+                f"{ds_name} ({path.name})", False,
+                f"no gated scorer applies to these rows: {hint} in "
+                "evals/scorers/offline/*.py", True))
+            red = True
     return rows, red
 
 
@@ -307,6 +333,8 @@ def main() -> None:
     ap.add_argument("--datasets", type=Path, default=DATASETS,
                     help="dir holding puzzles.jsonl and spoofs.jsonl")
     ap.add_argument("--gates", type=Path, default=EVALS / "gates.toml")
+    ap.add_argument("--scorers", type=Path, default=SCORERS_DIR,
+                    help="dir of offline score_* functions (default evals/scorers/offline)")
     args = ap.parse_args()
 
     if args.fake:
@@ -319,16 +347,17 @@ def main() -> None:
         "spoofs": (args.datasets / "spoofs.jsonl", load_jsonl(args.datasets / "spoofs.jsonl")),
     }
     gates = harness.load_gates(args.gates)
+    scorers = load_offline_scorers(args.scorers)
     trial_count = int(os.environ.get("TRIALS", "1"))
     project = None
     if os.environ.get("BT_SEND") == "1":
         project = "define-finished-offline"
 
-    rows, red = run_offline(datasets, decide, gates, trial_count=trial_count,
+    rows, red = run_offline(datasets, decide, scorers, gates, trial_count=trial_count,
                             project=project)
     if not args.fake:
         # --fake is itself a trivial bot, so the control only means something on real runs.
-        rows += dataset_controls(datasets, gates)
+        rows += dataset_controls(datasets, scorers, gates)
     sys.exit(harness.print_scoreboard(rows, "Offline evals"))
 
 
