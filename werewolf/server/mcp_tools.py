@@ -122,7 +122,7 @@ class Dispatcher:
         now = time.monotonic()
         last = self._rate.get(key, 0.0)
         if now - last < RATE_LIMIT_S:
-            return _err("rate_limited", "wait_for_turn/read_board are limited to 1/s")
+            return _err("rate_limited", "read_board is limited to 1/s")
         self._rate[key] = now
         return None
 
