@@ -243,7 +243,7 @@ def main() -> None:
     ap.add_argument("--seat", type=int, default=None,
                     help="score only this seat")
     ap.add_argument("--team", type=str, default=None,
-                    help="score seats whose game.json team label matches")
+                    help="score seats whose game.json team label matches (falls back to non-house seats if none match)")
     ap.add_argument("--latest", type=int, default=None, metavar="N",
                     help="score only the N most recently modified games")
     args = ap.parse_args()

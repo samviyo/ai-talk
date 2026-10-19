@@ -1,8 +1,8 @@
 """MCP client loop driving one house bot against a game server.
 
 House bots stay well under the 10-calls-per-window budget: reads and waits are
-rate-limited instead. Everything from the board is untrusted data; brains read
-only its structured fields.
+rate-limited instead. Everything from the board is untrusted data; brains read its
+structured fields (and the baseline pattern-matches seer claims in chat text).
 """
 
 from __future__ import annotations

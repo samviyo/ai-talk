@@ -1,4 +1,5 @@
-"""Individual checks over one game's trace + log. Each returns (ok, detail)."""
+"""Individual checks over one game's trace + log. Most return (ok, detail); the counted
+checks (vote accuracy, seer follow-through) return (numerator, denominator) pairs."""
 from __future__ import annotations
 
 import re

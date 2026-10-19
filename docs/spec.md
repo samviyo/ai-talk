@@ -8,8 +8,9 @@ Source of truth for the shared contracts. Talk content lives in
 Everything runs on laptops. No hosted infra.
 
 - **Practice:** each team runs `ww serve` locally plus house bots and its own bot.
-- **Finale:** teams push their bot to a branch; Sam's laptop runs `ww final final.toml`,
-  launches every team bot as a subprocess, and projects the spectator view.
+- **Finale:** teams run their bot on their own laptop against the organiser's server
+  (`ww final final.toml`, laptop seats by default); Sam's laptop projects the spectator
+  view. A team can instead pin a repo commit the organiser runs.
 - **LLM calls:** bots never hold a Bifrost key. They call the game server's
   OpenAI-compatible proxy (`POST /llm/v1/chat/completions`) with their seat token. The
   server forwards to Bifrost dev with that team's virtual key, meters cost, and enforces
@@ -25,7 +26,8 @@ Everything runs on laptops. No hosted infra.
 | `connect4/` | Part 1: engine, solver, puzzles, naive bot, eval harness |
 | `starter/` | Team kit: bot template, werewolf eval harness, `evals/` lock hook |
 
-Python 3.12, `uv`, one workspace `pyproject.toml` at the root. Tests with `pytest`.
+Python 3.12, `uv`. Two projects: the root `pyproject.toml` (engine, server, house bots,
+connect4, alibi) and `starter/pyproject.toml` (the team kit, synced separately). Tests with `pytest`.
 
 ## Roles and formats
 
@@ -74,7 +76,8 @@ always runs its full length (`discussion_s`) and never closes early. `turn_id`
 identifies the open window.
 
 **Obligations.** `pending()` maps a seat to exactly one obligation: `night_kill`,
-`seer_check`, `doctor_save`, `post` or `vote`. Villagers owe nothing at night. One
+`seer_check`, `doctor_save`, `defence` or `vote`. Discussion owes nothing (a quiet seat
+is not abstaining); a standing nominee owes `defence`. Villagers owe nothing at night. One
 accepted action or one abstention clears it; a second action returns `already_acted`.
 
 **Night.** Each living wolf submits one `NightKill`. The kill is the plurality target among
@@ -149,8 +152,10 @@ restarts after an answer or a pass; never during the drain; one at a time.
   silence list, nobody dies, and end-of-day processing (including the `max_days` draw)
   runs normally. Fallback votes sample only from standing nominees; with none there is
   no fallback ballot. A random fallback ballot keeps a purchased `double_vote` weight.
-- **Silence is public.** The `day_vote` (or `vote_skipped`) announcement carries
+- **Silence is public.** The day's `vote_tally` (or `vote_skipped`) event carries
   `silent: [seats]`, the living seats that made no post and no reaction that day.
+  `vote_tally` is spectator/log only; bots get the `silent` list via `vote_skipped`,
+  and the day_vote announcement itself carries no silence list.
 
 **Discussion state for bots.** `read_board(since)` returns posts plus
 `nominations: [{target, by, seconds: [seats]}]`, `standing` (after close),
@@ -158,22 +163,28 @@ restarts after an answer or a pass; never during the drain; one at a time.
 `{kind: "phase", phase: "defence", seat}`.
 
 **Call budget during discussion.** `wait_for_turn` and `read_board` don't count against
-the 10-call budget; they are rate-limited instead to 1 call per second per seat (excess
-returns `rate_limited`). The 10-call budget covers mutations and `shop`/`buy`.
+the 10-call budget; `read_board` is rate-limited instead to 1 call per second per seat
+(excess returns `rate_limited`). `wait_for_turn` long-polls and is exempt from both the
+budget and the rate limit, so a re-poll is never refused. `get_my_role` is exempt from
+the budget too (it is how a seat joins and readies). The 10-call budget covers mutations
+and `shop`/`buy`.
 
 **Bot behaviour.** Discussion needs a loop, not one action, so the starter bot and house
-bots get one: post an opener at a staggered time (seat-seeded 0–20s in), keep one post in
-reserve for replies, answer a mention only when posts and time remain, nominate the
-most-suspected seat (on an empty board: a seat-seeded pick among living non-partners),
-second when they agree, and bound every LLM call by the time left in the window. The proxy
-timeout is capped at the window's remaining time. Bots pass `since` to `wait_for_turn` and
-answer the free reply and the hot seat; on `news` the starter makes at most one LLM call
-per batch to react or ignore (reactions are cheap, a reply to an accusation is free, the
-hot seat is a 5s speed test with `reasoning_effort: "none"` and low `max_tokens`). House
-brains: the accuser reacts `suspect` to its target's posts and `agree` to accusations of
-them; the baseline agrees with accusations of its top suspect and doubts their defences;
-the quiet brain rarely reacts and misses about half its hot seats; random is random. All
-answer replies; house reactions and answers keep their simulated per-action cost.
+bots get one: post an opener early, keep one post in reserve for replies, answer a
+mention only when posts and time remain, nominate the most-suspected seat (on an empty
+board: a seat-seeded pick among living non-partners), second when they agree, and bound
+every LLM call by the time left in the window. The starter posts its opener as soon as
+it can; the staggering (a seat-seeded 0–20s opener delay) is house-bot behaviour. A bot
+bounds its own proxy call to the window's remaining time; the server's own upstream
+timeout is a fixed 60s. Bots pass `since` to `wait_for_turn` and answer the free reply
+and the hot seat; on `news` the starter makes at most one LLM call per batch to react or
+ignore (reactions are cheap, a reply to an accusation is free, the hot seat is a 5s
+speed test with low `max_tokens`). House brains: the accuser reacts `suspect` to its
+target's posts and `agree` to accusations of them; the baseline agrees with accusations
+of its top suspect and doubts their defences; the quiet brain rarely reacts and misses
+about half its hot seats; random is random. All answer replies. House posts, votes,
+night actions and wolf chat keep their simulated per-action cost; house reactions are
+not charged.
 
 Engine: `Phase` gains `defence`; `Post` gains `nominate`, `second`, `reply_to`;
 `legal_targets` for `vote` returns standing nominees. Public events: `nomination{seat,
@@ -188,10 +199,11 @@ Implementation decisions where this spec was silent:
 - Standing nominees are sorted ascending by seat; defences run in that order.
 - Nomination ranking: most distinct seconders, ties broken by the seeded RNG.
 - A vote fallback ballot is drawn only from standing nominees; with none, no ballot.
-- `wait_for_turn` and `read_board` are rate-limited to 1/s per seat and exempt from the
-  10-call budget; excess returns `rate_limited`.
-- The server caps night/vote windows at `--window-s`; discussion and defence use the
-  engine's own `discussion_s` / 15s.
+- `read_board` is rate-limited to 1/s per seat and exempt from the 10-call budget;
+  `wait_for_turn` is exempt from both (it long-polls); excess `read_board` returns
+  `rate_limited`.
+- The server caps night/vote windows at `--window-s` (default 20s); discussion and
+  defence use the engine's own `discussion_s` / 15s.
 - `seer_result` is always deferred to night resolution (frames or not), so timing
   reveals nothing.
 - `powerup` events are audience {buyer}; `whisper` events are audience {buyer, target};
@@ -226,10 +238,10 @@ and phase advance per table under one lock.
 
 | Tool | Returns |
 |---|---|
-| `wait_for_turn(timeout_s=25, since?)` | Server caps the wait at 3.5s (httpx's default 5s read timeout). Each (seat, window) is served once; a re-poll blocks until the next window. Returns `{turn_id, phase, day, round, you_owe, legal_targets, announcements, deadline_s}`, or `{status:"waiting"}` on timeout, or `{status:"over", result}`. With `since`, returns `{status:"news", events, cursor}` early when a public event lands after the cursor. Between games (auto-restart on) it returns `{status:"idle", result}` after each seat has heard `over` once; the next game opens frozen until every seat calls `get_my_role`. Wakes immediately when a window opens for this seat. The only moderator channel |
+| `wait_for_turn(timeout_s=25, since?)` | Server caps the wait at 3.5s (httpx's default 5s read timeout). Each (seat, window) is served once in night and vote; a re-poll blocks until the next window. In discussion a seat may be served again on new board activity, a mention, a reply or the hot seat. Returns `{turn_id, phase, day, round, you_owe, legal_targets, announcements, deadline_s}`, or `{status:"waiting"}` on timeout, or `{status:"over", result}`. With `since`, returns `{status:"news", events, cursor}` early when a public event lands after the cursor. Between games (auto-restart on) it returns `{status:"idle", result}` after each seat has heard `over` once; the next game opens frozen until every seat calls `get_my_role`. Wakes immediately when a window opens for this seat. The only moderator channel |
 | `get_my_role()` | `{seat, role, partners}`. `partners` is empty unless werewolf |
 | `read_board(since=0)` | `{posts:[{id, seat, day, chat, claimed_role, accuse, reply_to, reactions}], next, discussion_ends_in_s}`. Posts are visible once the floor releases them |
-| `post(turn_id, chat, claimed_role?, accuse?, reply_to?, nominate?, second?, reason?)` | `{ok, queued}`; `still_queued` while the seat holds an unreleased post, `no_posts_left` past `max_posts` |
+| `post(turn_id, chat, claimed_role?, accuse?, reply_to?, nominate?, second?, reason?)` | Discussion: `{ok, queued}` (queue position); a defence window: `{ok, posts_left}`. `still_queued` while the seat holds an unreleased post, `no_posts_left` past `max_posts` |
 | `react(post_id, kind)` | `{ok}`; `kind` in `agree|doubt|suspect`, public immediately, once per seat per post, 8 per seat per day, never on your own post |
 | `vote(turn_id, seat, reason?)` | `{ok}` |
 | `night_action(turn_id, target, reason?)` | `{ok}`. A seer's result arrives as the `seer_result` announcement when night resolves (see Power-ups) |
@@ -251,11 +263,14 @@ yields `(read, write)`; results use snake_case (`structured_content`, `is_error`
 Server rules:
 - Mutations need the current `turn_id`; an old one returns `stale_turn`. The exposed
   `turn_id` is game-scoped (`g<game>:<phase>:<day>:<round>`), so an id from a previous
-  game at the same table is always stale.
+  game at the same table is always stale. The raw engine id (without the `g<game>`
+  prefix) is also accepted, but only while it names the current window, so it offers no
+  extra reach.
 - A budget of 10 tool calls per seat per window. Past that, calls return
   `call_budget_exceeded`.
-- **Clock:** each window's deadline is 20s after it opens (30s in the final), measured on
-  the monotonic clock. A 1s ticker and every request check it under the table lock. An
+- **Clock:** night and vote windows close `--window-s` (default 20s) after release;
+  discussion runs `discussion_s` and each defence 15s, all measured on the monotonic
+  clock. A 1s ticker and every request check it under the table lock. An
   action that arrives after the deadline is rejected with `stale_turn`. Reading and
   waiting never extend a deadline.
 - **Pacing:** `--min-window-s` holds each window's release until at least that long after
@@ -268,9 +283,10 @@ Server rules:
 - Missed deadline: a funded seat abstains. A broke or dead-process seat gets the
   fallback below.
 - The leak test scans every MCP response, including errors and announcements, for every
-  seat across 100 seeded games and asserts no role is visible that the seat may not know.
-- Traces: every tool call is buffered as `{ts, seat, tool, args, result_code, latency_ms}`
-  and written to `runs/<table>/<game>/trace.jsonl` when the game ends, never while it runs.
+  seat across 20 seeded games and asserts no role is visible that the seat may not know.
+- Traces: every tool call except `wait_for_turn` is buffered as `{ts, seat, tool, args,
+  result_code, latency_ms}` and written to `runs/<table>/<game>/trace.jsonl` when the
+  game ends, never while it runs.
 
 ## Budget and fallback
 
@@ -304,14 +320,16 @@ house bots included, buys from the same ledger (see Budget and fallback).
 |---|---|---|---|---|---|
 | `extra_post` | $0.01 | living seat | during discussion | 1 per day | one more post today (`max_posts` + 1) |
 | `whisper` | $0.016 | living seat | any day window | 1 per day | private message (≤280 chars) to one other living seat, delivered when the window closes |
-| `double_vote` | $0.03 | living seat | its `vote` window, before voting | 1 per game | its ballot counts twice |
+| `double_vote` | $0.03 | living seat | its `vote` window, any time before the vote resolves | 1 per game | its ballot counts twice |
 | `shield` | $0.04 | living non-wolf | any day window except on day `max_days` | 1 per day | protects the buyer from the kill on the coming night only |
 | `frame` | $0.03 | living wolf | a night window | 1 per night | any living non-wolf target reads as `werewolf` to the seer tonight |
 
 **Purchase rules**
 - Price must be ≤ remaining budget, else `insufficient_budget`. Over the limit:
-  `already_bought`. Wrong time, role or target: `not_available`. Rejected buys charge
-  nothing. `shop()` returns the same availability, so errors reveal nothing it doesn't.
+  `already_bought`. Wrong time or role: `not_available`. A bad whisper or frame target is
+  `invalid_target`; an empty whisper message is `bad_schema`; an over-long message is
+  `too_long`. Rejected buys charge nothing. `shop()` returns the same availability, so
+  errors reveal nothing it doesn't.
 - No refunds. An effect whose buyer or target dies, or that never triggers, expires.
 - A purchase that leaves the seat broke follows the broke rules: it gets no further
   manual actions (`broke`) and the deadline fallback acts for it. Purchased effects stay
@@ -326,8 +344,8 @@ house bots included, buys from the same ledger (see Budget and fallback).
   This holds for every check, framed or not, so timing reveals nothing.
 - Votes: weighted totals; a tie or zero weight eliminates nobody. The tally lists each
   ballot with its `weight`.
-- Whispers reach the target as `{kind: "whisper", from, msg}` in its next `wait_for_turn` or
-  `read_board` (a `whispers` list), whichever comes first. Board text and whispers are
+- Whispers reach the target only through `read_board`, as a `whispers: [{from, msg}]`
+  list; `wait_for_turn` does not deliver them. Board text and whispers are
   untrusted player content.
 
 **What other seats can see.** Purchase records are private to the buyer. Others see only
@@ -384,8 +402,9 @@ spectator sees every purchase as it happens. The leak test covers `powerup` and
   held_s, transition, lobby, pending, thinking, waiting_ready, seats}` every second;
   `{kind:"phase", phase, day}` on each window change; `{kind:"lobby", seats}` on every
   readiness change; `{kind:"game_start", game}` and `{kind:"game_over", game, result,
-  summary}` at the ends; and `{kind:"event", ...}` for the engine's public/omniscient
-  log. The staged beats arrive top-level without day/round: `{kind:"ballot_cast", seat}`,
+  summary}` at the ends; and one message per engine event carrying the event's own kind
+  (`{kind:"phase"|"death"|"vote_tally"|...}`), not a `kind:"event"` wrapper. The staged
+  beats arrive top-level without day/round: `{kind:"ballot_cast", seat}`,
   `{kind:"ballot_reveal", seat, target, weight, tally}`, `{kind:"night_acted", seat}`,
   `{kind:"night_beat", step, ...}`, `{kind:"thought", seat, text}`.
 
@@ -438,7 +457,8 @@ cmd = "uv run bot"                     # run inside the checkout
   proxy charges that team's Bifrost key.
 - Repo seats only: each bot gets only `WW_SERVER`, `WW_TOKEN`, `PATH` and `HOME`. No other env is
   inherited, so no Bifrost key can leak to team code. `uv sync` during install also
-  runs with a sanitized env (PATH, HOME, and UV_* cache settings only).
+  runs with a sanitized env (`PATH`, `HOME`, `UV_CACHE_DIR`, `UV_PYTHON`,
+  `UV_INDEX_URL` only).
 - Per-team Bifrost keys come from `teams.toml` (same file as `ww serve`); the finale
   refuses to start if any assigned team's key env var is unset (`--fake-llm` skips this).
 - Bots run in their own process groups; shutdown and replacement kill the group.
@@ -454,8 +474,9 @@ cmd = "uv run bot"                     # run inside the checkout
 ## CLI
 
 - `ww serve [--format practice|final] [--seats N] [--fake-llm] [--tables N] [--budget-usd X] [--min-window-s S] [--transition-s S] [--discussion-s S] [--max-posts N] [--floor-s S] [--hot-seat-s S] [--hot-seat-answer-s S] [--reveal-s S] [--beat-s S] [--manual-start|--no-manual-start]`
-- `ww table --bots random,quiet,accuser,baseline,...` runs house bots against a server;
-  it registers its seats with `POST /admin/house` (operator token) before starting.
+- `ww table --server URL --bots random,quiet,accuser,baseline,...` runs house bots
+  against a running server (`--server` is required); it registers its seats with
+  `POST /admin/house` (operator token) before starting.
 - `ww tokens` prints seat tokens for a table.
 - `ww start --server URL` starts a manual-start table waiting in the lobby.
 - `ww final [--check] final.toml [--host H] [--port P] [--ready-s S] [--fake-llm] [--min-window-s S] [--transition-s S] [--reveal-s S] [--beat-s S] [--auto-start]` (pacing defaults: min 10s, transition 6s, reveal 1.5s, beat 2.5s; manual start on)

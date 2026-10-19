@@ -3,7 +3,7 @@
 ---
 
 You are working in this repo. The game is Werewolf: your bot plays through the MCP
-tools documented in README.md. Our eval suite (our scorers and their gates, over
+tools documented in `docs/spec.md` of the organiser repo. Our eval suite (our scorers and their gates, over
 one task per game-and-seat, each task run as a trial against the game's transcript
 and outcome) is the ground truth — a capability eval of what the bot can do and a
 regression eval of what your changes break.
