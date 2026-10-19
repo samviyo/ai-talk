@@ -47,9 +47,11 @@ Port 8000 is often taken on this laptop; pick another.
   `make unlock-*`; a human unlocks.
 - **Teams write their own evals.** The starter ships a harness, not a suite. Don't add scorers, gates or datasets
   to `starter/evals/` or the `team_evals/` dirs; example scorers go in scratch space, not the repo.
-- **Keys.** Bots never hold a Bifrost key; they call the server's `/llm/v1/chat/completions` proxy with a seat token.
+- **Keys.** In a game, a bot never holds a Bifrost key; it calls the server's `/llm/v1/chat/completions` proxy with a seat token.
   The server reads per-team key env var *names* from `teams.toml` (local, untracked; see `teams.example.toml`).
-  Never print a key value or read `.env`.
+  The offline `make check` is the exception: it calls Bifrost directly with the team's own
+  `BIFROST_API_KEY`/`BIFROST_BASE_URL` (`starter/bot/puzzle_decide.py`) and spends it. Never print a key value or read `.env`.
 - **Held-out data stays out of git.** `alibi/datasets/heldout.jsonl` is ignored; held-out rows come from `ALIBI_HELDOUT_SEED`.
 - **Game output.** `runs/` is ignored. Point throwaway games at a scratch `--runs-dir`.
-- Evals run on Braintrust `Eval()` and score locally by default; nothing leaves the machine unless `BT_SEND=1`.
+- Evals run on Braintrust `Eval()` and score locally by default; `BT_SEND=1` only controls Braintrust logging.
+  A real `make check` still sends prompts to Bifrost directly and spends the team's key (see Keys).

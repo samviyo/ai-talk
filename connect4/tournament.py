@@ -13,7 +13,7 @@ from .play import play_game
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="connect4.tournament")
     ap.add_argument("bots", nargs="+", help="bot specs, e.g. connect4.bots.random_bot:choose")
-    ap.add_argument("--games", type=int, default=2, help="games per pairing (split across colors)")
+    ap.add_argument("--games", type=int, default=2, help="games per pairing, split across colors (rounds down to even, min 2)")
     args = ap.parse_args(argv)
 
     specs = args.bots

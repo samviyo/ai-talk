@@ -1,4 +1,4 @@
-# Organiser reference: the finished 13-gate Werewolf suite
+# Organiser reference: the finished Werewolf suite
 
 Organiser command to score any team's runs dir (used after the finale):
 

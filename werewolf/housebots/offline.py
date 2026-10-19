@@ -1,7 +1,8 @@
 """Offline balance harness: run house-bot brains against the engine without a server.
 
 Simulates one full game per seed by rebuilding each brain's runner-shaped view
-from engine events, so balance numbers match the live `ww table` behavior.
+from engine events: an approximate balance simulation, not a live `ww table` match
+(no floor, hot seat, or spending ledger).
 Discussion ticks every TICK_S: each living seat decides an opener/reply/talk.
 """
 from __future__ import annotations

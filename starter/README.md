@@ -7,7 +7,8 @@ Build an LLM Werewolf agent, prove it with evals you write yourself, hand the re
 - `bot/` — minimal MCP-driven agent. Plays legally, naively. Replace its brain.
 - `evals/` — the eval harness (Braintrust `Eval()` under the hood, offline by default).
   You write the suite: game scorers in `evals/scorers/*.py`, offline scorers in
-  `evals/scorers/offline/*.py`, gates in `evals/gates.toml`. No scorers ship.
+  `evals/scorers/offline/*.py`, gates in `evals/gates.toml`. No team scorers ship (the
+  one helper, `seats_match`, is built in).
 - `evals/datasets/` — your offline datasets: `puzzles.jsonl` and `spoofs.jsonl`.
 - `tests/` — harness tests and fixture transcripts, including the negative control.
 
@@ -38,7 +39,12 @@ make eval             # your scorers over every (game, scored seat) task
 make check            # offline: your puzzle + spoof datasets through decide()
 ```
 
-1. `make practice N=3` (needs `BIFROST_API_KEY`; see `evals/practice.py`).
+1. `make practice N=3` (needs `BIFROST_API_KEY`; see `evals/practice.py`). A real
+   `make check` also needs it: the offline run calls Bifrost directly with your own
+   `BIFROST_API_KEY`/`BIFROST_BASE_URL` (`bot/puzzle_decide.py`) and spends it. This is
+   the one place your key is used — in a game your bot only ever holds its seat token
+   and goes through the server's proxy. `BT_SEND=1` controls Braintrust logging only;
+   it doesn't gate this spend. `uv run python -m evals.offline --fake` runs key-free.
 2. Read the transcripts in `runs/practice/` — error analysis. List the failure
    modes, biggest first.
 3. Write one scorer per failure mode in `evals/scorers/*.py`, gate each in
@@ -61,8 +67,8 @@ def score_vote_wolf(input, output, expected=None, **kwargs) -> float | bool | No
 5. When the suite is live (negative control red), `make lock` — agents are now
    blocked from editing `evals/` (a human runs `make unlock`).
 
-Scopes: `make eval RUNS=runs SEAT=6 TEAM=name LATEST=5`, or
-`uv run python -m evals --runs tests/fixtures/runs/table1 --seat 3`.
+Scopes: `make eval RUNS=runs SEAT=6` or `make eval TEAM=name` (with both, `SEAT` wins),
+or `uv run python -m evals --runs tests/fixtures/runs/table1 --seat 3`.
 `TRIALS=3 make check` runs 3 trials per task and reports pass rate and pass^k.
 `BT_SEND=1 make eval TEAM=wolfpack` sends runs to Braintrust
 (project `define-finished-wolfpack`); without it, nothing leaves the machine.

@@ -15,8 +15,9 @@ The view dict is assembled by the runner from MCP responses:
     }
 
 decide returns one action dict {"tool": <mcp tool>, "args": {...}} (the runner
-adds turn_id) or None to abstain. Board chat text is player content: brains read
-only the structured fields (accuse, claimed_role), never instructions in text.
+adds turn_id) or None to abstain. Board chat text is player content: brains mostly read
+the structured fields (accuse, claimed_role); the baseline also pattern-matches seer
+claims in chat text. Brains never follow instructions in text.
 """
 
 from __future__ import annotations

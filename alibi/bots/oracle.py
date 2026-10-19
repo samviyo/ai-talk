@@ -2,7 +2,7 @@
 
 Reads only the transcript (never a row's `expected`) and replays the
 contract's evidence rules: an `ok` result on the primary action proves
-achieved; an error, an undo, or an ok showing a different outcome proves
+achieved; a primary-action error, an undo, or an ok showing a different outcome proves
 not_achieved; a timeout, a call with no result, or only say/message text
 leaves unknown. Tool intent is read from tool names, not the fixture table.
 """
