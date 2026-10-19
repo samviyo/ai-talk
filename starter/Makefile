@@ -18,7 +18,7 @@ eval:
 	uv run python -m evals --runs $(or $(RUNS),runs/practice) $(if $(SEAT),--seat $(SEAT),) $(if $(TEAM),--team $(TEAM),) $(if $(LATEST),--latest $(LATEST),)
 
 # Suite files frozen by lock/unlock: make's wildcard keeps empty dirs working.
-FROZEN := $(wildcard evals/scorers/*.py) evals/gates.toml $(wildcard evals/datasets/*.jsonl)
+FROZEN := $(wildcard evals/scorers/*.py) $(wildcard evals/scorers/offline/*.py) evals/gates.toml $(wildcard evals/datasets/*.jsonl)
 
 # Freeze the suite: agents can no longer edit evals/ (evals/.locked).
 lock:

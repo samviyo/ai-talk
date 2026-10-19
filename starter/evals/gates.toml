@@ -7,10 +7,6 @@
 #   min_n = 3        # optional: RED "insufficient evidence" below this many
 #                    # applicable (non-None) trials; default is 1
 #
-# These two gate the shipped offline harness scorers (they only compare to your
-# own `expected` in evals/datasets/*.jsonl — standard dataset/expected).
-[seats_match]
-min = 0.8
-
-[refused_spoof]
-min = 1.0
+# Gate your game scorers (evals/scorers/*.py) and your offline scorers
+# (evals/scorers/offline/*.py) here. `seats_match`, the one shipped puzzle
+# helper, is info until you gate it.

@@ -45,7 +45,7 @@ class Row:
     exception: str = ""
 
 
-def load_scorers(scorers_dir: Path) -> list[tuple[str, object]]:
+def load_scorers(scorers_dir: Path, prefix: str = "scorers") -> list[tuple[str, object]]:
     """Import every *.py in scorers_dir; return its score_* functions, name order."""
     scorers: list[tuple[str, object]] = []
     if not scorers_dir.is_dir():
@@ -53,7 +53,7 @@ def load_scorers(scorers_dir: Path) -> list[tuple[str, object]]:
     for path in sorted(scorers_dir.glob("*.py")):
         if path.stem.startswith("_"):
             continue
-        mod_name = f"scorers_{path.stem}"
+        mod_name = f"{prefix}_{path.stem}"
         spec = importlib.util.spec_from_file_location(mod_name, path)
         module = importlib.util.module_from_spec(spec)
         sys.modules[mod_name] = module
