@@ -101,13 +101,13 @@ async def _discuss(session: ClientSession, llm, config: BotConfig,
             if _queued(await _call(session, "post", args)):
                 queued_until = asyncio.get_event_loop().time() + QUEUED_BACKOFF_S
         elif owe == "hot_seat":
-            # 5s speed test: no reasoning, a handful of tokens.
+            # 5s speed test: a handful of tokens, a tight timeout.
             prompt = (
                 f"Hot seat, answer fast, one short line: {turn.get('prompt', '')}"
             )
             reply = llm.complete(
                 config.decide_model, prompt, timeout_s=4.0,
-                max_tokens=48, fast=True,
+                max_tokens=48,
             )
             if llm.broke:
                 return None

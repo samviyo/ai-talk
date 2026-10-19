@@ -142,6 +142,12 @@ async def test_funded_wolf_decides_kill(tmp_path: Path):
             "turn_id": table.game.turn_id, "target": target,
         })
         assert r.get("ok") is True
+        # a broke seat gets no manual actions: the deadline fallback acts for it
+        for tool, args in (("night_action", {"turn_id": table.public_turn_id(), "target": target}),
+                           ("wolf_chat", {"msg": "hi"}),
+                           ("vote", {"turn_id": table.public_turn_id(), "seat": target})):
+            r = await mcp_call(srv.url, srv.token(broke_wolf), tool, args)
+            assert r.get("error") == "broke", (tool, r)
         # now let the clock fire: broke wolf must abstain, kill still lands
         async with table.cond:
             table._released_at -= 120.0

@@ -5,7 +5,7 @@ your bot to a coding agent and let it turn them green.
 
 ## Contract
 
-- Any file in this directory (not `gates.toml`, not this README).
+- Any importable Python module in this directory (not `gates.toml`, not this README).
 - Any function named `score_*` with this shape:
 
 ```python
