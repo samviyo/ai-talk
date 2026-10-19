@@ -282,7 +282,8 @@ def main() -> int:
     p_table.add_argument("--table", type=int, default=1)
     p_table.add_argument("--bots", required=True)
     p_table.add_argument("--token-file", default="")
-    common(p_table)
+    p_table.add_argument("--seed", type=int, default=1)
+    p_table.add_argument("--runs-dir", default="runs")
     p_table.set_defaults(func=cmd_table)
 
     p_final = sub.add_parser("final")

@@ -470,6 +470,8 @@ class Dispatcher:
         return float(self.state.house_prices.get(brain, 0.0))
 
     def _tool_vote(self, table: Table, seat: int, args: dict) -> dict | CallToolResult:
+        if table.is_broke(seat):
+            return _err("broke", "seat budget exhausted")
         stale = self._check_turn_id(table, args)
         if stale is not None:
             return stale
@@ -485,6 +487,8 @@ class Dispatcher:
     def _tool_night_action(
         self, table: Table, seat: int, args: dict
     ) -> dict | CallToolResult:
+        if table.is_broke(seat):
+            return _err("broke", "seat budget exhausted")
         stale = self._check_turn_id(table, args)
         if stale is not None:
             return stale
@@ -509,6 +513,8 @@ class Dispatcher:
         return {"ok": True}
 
     def _tool_wolf_chat(self, table: Table, seat: int, args: dict) -> dict | CallToolResult:
+        if table.is_broke(seat):
+            return _err("broke", "seat budget exhausted")
         try:
             table.game.wolf_chat(seat, str(args.get("msg") or ""))
         except IllegalAction as e:
