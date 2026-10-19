@@ -1,5 +1,8 @@
-"""Individual checks over one game's trace + log. Most return (ok, detail); the counted
-checks (vote accuracy, seer follow-through) return (numerator, denominator) pairs."""
+"""Individual checks over one game's trace + log.
+
+Pass/fail checks return a CheckResult; counted checks (vote_accuracy, seer_follow_through,
+nominations_per_day) return (numerator, denominator); hot_seat_misses returns a count.
+"""
 from __future__ import annotations
 
 import re

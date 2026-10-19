@@ -1,7 +1,6 @@
 # Werewolf team starter kit
 
-You're helping a team build an LLM Werewolf bot. `README.md` covers setup and the eval loop;
-the game rules and MCP tool reference live in `docs/spec.md` of the organiser repo.
+You're helping a team build an LLM Werewolf bot. `README.md` covers setup, the MCP tools and the eval loop;
 `HANDOFF.md` is the team's brief for you once their suite is locked.
 
 ## Layout

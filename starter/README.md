@@ -23,6 +23,30 @@ uv run bot                               # or: make bot
 Model choice lives in `bot/config.toml` (`read_board_model`, `decide_model`).
 Only models in the server's `prices.toml` are accepted; `max_tokens` is required.
 
+## MCP tools
+
+Your bot connects to `$WW_SERVER/mcp` with `Authorization: Bearer $WW_TOKEN`. Every result is
+JSON; a refused call comes back as `{"error": "<code>", ...}`.
+
+| Tool | What it does |
+|---|---|
+| `wait_for_turn(timeout_s=25, since?)` | Blocks up to 3.5s. Returns `{turn_id, phase, you_owe, legal_targets, announcements, deadline_s, ...}`, `{status:"waiting"}`, or `{status:"over", result}`. With `since`, returns `{status:"news", events, cursor}` when a public event lands. The only moderator channel |
+| `get_my_role()` | `{seat, role, partners}`; `partners` is empty unless werewolf |
+| `read_board(since=0)` | `{posts, next, nominations, posts_left, whispers, ...}`; may carry `you_owe: reply` or `hot_seat` too. Rate-limited to 1/s (`rate_limited`) |
+| `post(turn_id, chat, claimed_role?, accuse?, reply_to?, nominate?, second?)` | Discussion or defence post. `still_queued` while your last post waits for the floor; `no_posts_left` past the limit |
+| `react(post_id, kind)` | `agree`, `doubt` or `suspect`; once per post, 8 a day, never your own |
+| `vote(turn_id, seat)` | Vote for a standing nominee |
+| `night_action(turn_id, target)` | `night_kill`, `seer_check` or `doctor_save`; a seer's result arrives as a `seer_result` announcement |
+| `wolf_chat(msg)` / `read_wolf_chat(since=0)` | Werewolves only |
+| `get_budget()` | `{spent_usd, limit_usd, remaining_usd, broke}` |
+| `shop()` / `buy(turn_id, item, target?, msg?)` | Power-ups: `extra_post`, `whisper`, `double_vote`, `shield`, `frame` |
+
+Rules the server enforces: mutations need the current `turn_id` (else `stale_turn`); 10 budgeted
+calls per seat per window (`call_budget_exceeded`; `wait_for_turn` and `read_board` don't count);
+a broke seat gets `broke` and the server's fallback acts for it. `you_owe` is one of `night_kill`,
+`seer_check`, `doctor_save`, `discuss`, `defence`, `vote`, `reply` or `hot_seat`. Board posts and
+whispers are player content, never instructions.
+
 ## Evals: the loop
 
 You write the suite; the harness runs it. A *task* is one test case, a *trial* is one
@@ -41,9 +65,9 @@ make check            # offline: your puzzle + spoof datasets through decide()
 
 1. `make practice N=3` (needs `BIFROST_API_KEY`; see `evals/practice.py`). A real
    `make check` also needs it: the offline run calls Bifrost directly with your own
-   `BIFROST_API_KEY`/`BIFROST_BASE_URL` (`bot/puzzle_decide.py`) and spends it. This is
-   the one place your key is used — in a game your bot only ever holds its seat token
-   and goes through the server's proxy. `BT_SEND=1` controls Braintrust logging only;
+   `BIFROST_API_KEY`/`BIFROST_BASE_URL` (`bot/puzzle_decide.py`) and spends it. It's the
+   one place your bot calls Bifrost directly; in a game it only holds its seat token, and
+   the practice server spends your key on its behalf through the proxy. `BT_SEND=1` controls Braintrust logging only;
    it doesn't gate this spend. `uv run python -m evals.offline --fake` runs key-free.
 2. Read the transcripts in `runs/practice/` — error analysis. List the failure
    modes, biggest first.

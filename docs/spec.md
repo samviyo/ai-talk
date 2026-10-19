@@ -175,7 +175,8 @@ mention only when posts and time remain, nominate the most-suspected seat (on an
 board: a seat-seeded pick among living non-partners), second when they agree, and bound
 every LLM call by the time left in the window. The starter posts its opener as soon as
 it can; the staggering (a seat-seeded 0–20s opener delay) is house-bot behaviour. A bot
-bounds its own proxy call to the window's remaining time; the server's own upstream
+bounds its own proxy call to the window's remaining time (the starter's hot seat and
+news reactions use fixed 4s and 3s timeouts instead); the server's own upstream
 timeout is a fixed 60s. Bots pass `since` to `wait_for_turn` and answer the free reply
 and the hot seat; on `news` the starter makes at most one LLM call per batch to react or
 ignore (reactions are cheap, a reply to an accusation is free, the hot seat is a 5s
