@@ -7,3 +7,4 @@ runs/
 .serena/
 .playwright-mcp/
 alibi/datasets/heldout.jsonl
+teams.toml
