@@ -205,6 +205,7 @@ def cmd_final(args: argparse.Namespace) -> int:
             min_window_s=args.min_window_s, transition_s=args.transition_s,
             reveal_s=args.reveal_s, beat_s=args.beat_s,
             manual_start=not args.auto_start,
+            host=args.host, ready_s=args.ready_s, fake_llm=args.fake_llm,
         )
     )
 
@@ -288,6 +289,10 @@ def main() -> int:
     p_final.add_argument("toml")
     p_final.add_argument("--check", action="store_true")
     p_final.add_argument("--port", type=int, default=8000)
+    # 0.0.0.0 lets laptop seats on the same network reach the server
+    p_final.add_argument("--host", default="127.0.0.1")
+    p_final.add_argument("--ready-s", type=float, default=90.0)
+    p_final.add_argument("--fake-llm", action="store_true")
     p_final.add_argument("--budget-usd", type=float, default=0.10)
     p_final.add_argument("--min-window-s", type=float, default=10.0)
     p_final.add_argument("--transition-s", type=float, default=6.0)

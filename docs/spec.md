@@ -421,24 +421,35 @@ order with `{seat, day, cause}`, `spend_total`, `broke_seats`, `most_accused` an
 seats = 12
 seed = 2026
 [[teams]]
-name = "wolfpack"
-repo = "git@github.com:...#<commit>"   # pinned commit
+name = "wolfpack"                      # no repo: a laptop seat (the default on the day)
+
+[[teams]]
+name = "silverbullet"
+repo = "git@github.com:...#<commit>"   # optional: pinned commit, run by the organiser
 cmd = "uv run bot"                     # run inside the checkout
 ```
 
+- No submission. A team without `repo` is a **laptop seat**: the team runs `uv run bot` on its own
+  laptop with the `WW_SERVER` and `WW_TOKEN` the finale prints and writes to
+  `runs/final/laptop_seats.json`. Serve with `--host 0.0.0.0` so laptops can reach it.
 - Each team gets exactly one seat; baseline house bots fill the rest. Seats are
   shuffled with the seed.
-- Each bot gets only `WW_SERVER`, `WW_TOKEN`, `PATH` and `HOME`. No other env is
+- Bots never hold a key: every seat calls the server's LLM proxy with its token, and the
+  proxy charges that team's Bifrost key.
+- Repo seats only: each bot gets only `WW_SERVER`, `WW_TOKEN`, `PATH` and `HOME`. No other env is
   inherited, so no Bifrost key can leak to team code. `uv sync` during install also
   runs with a sanitized env (PATH, HOME, and UV_* cache settings only).
 - Per-team Bifrost keys come from `teams.toml` (same file as `ww serve`); the finale
-  refuses to start if any assigned team's key env var is unset.
+  refuses to start if any assigned team's key env var is unset (`--fake-llm` skips this).
 - Bots run in their own process groups; shutdown and replacement kill the group.
 - **Readiness barrier:** the first window stays closed until every seat has called
-  `get_my_role`, or after 90s. A seat that is not ready by then is replaced by a
-  baseline house bot. The clock starts only when the barrier opens.
-- A bot process that exits mid-game is treated as broke for the rest of the game.
-- `ww final --check final.toml` clones, installs and smoke-starts every bot, then exits.
+  `get_my_role`, or after `--ready-s` (default 90s). A seat that is not ready by then is
+  replaced by a baseline house bot under a fresh token, so a late bot gets `unauthorized`.
+  The clock starts only when the barrier opens.
+- A repo bot process that exits mid-game is treated as broke for the rest of the game. A laptop
+  bot that drops out misses deadlines like any funded seat.
+- `ww final --check final.toml` clones, installs and smoke-starts every repo bot, then exits.
+- Runbook for the day: `docs/finale.md`.
 
 ## CLI
 
@@ -447,7 +458,7 @@ cmd = "uv run bot"                     # run inside the checkout
   it registers its seats with `POST /admin/house` (operator token) before starting.
 - `ww tokens` prints seat tokens for a table.
 - `ww start --server URL` starts a manual-start table waiting in the lobby.
-- `ww final [--check] final.toml [--min-window-s S] [--transition-s S] [--reveal-s S] [--beat-s S] [--auto-start]` (pacing defaults: min 10s, transition 6s, reveal 1.5s, beat 2.5s; manual start on)
+- `ww final [--check] final.toml [--host H] [--port P] [--ready-s S] [--fake-llm] [--min-window-s S] [--transition-s S] [--reveal-s S] [--beat-s S] [--auto-start]` (pacing defaults: min 10s, transition 6s, reveal 1.5s, beat 2.5s; manual start on)
 
 ## Connect Four (`connect4/`)
 
