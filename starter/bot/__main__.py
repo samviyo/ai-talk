@@ -235,7 +235,8 @@ async def play(server: str, token: str, config: BotConfig) -> None:
             async with ClientSession(read, write) as session:
                 await session.initialize()
                 role_info = await _call(session, "get_my_role", {})
-                if not isinstance(role_info, dict):
+                # A rejected token comes back as an error dict, not a role.
+                if not isinstance(role_info, dict) or "role" not in role_info:
                     print(f"get_my_role failed: {role_info}", file=sys.stderr)
                     return
                 my_role = role_info["role"]

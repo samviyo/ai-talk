@@ -1,13 +1,18 @@
-"""Finale launcher: clone pinned team repos, uv sync, run with a clean env."""
+"""Finale launcher: clone pinned team repos, uv sync, run with a clean env.
+
+A team with no `repo` is a laptop seat: it runs its own bot against this server.
+"""
 
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import random
 import secrets
 import shutil
 import signal
+import socket
 import subprocess
 import sys
 import tomllib
@@ -28,14 +33,31 @@ INSTALL_ENV_ALLOWLIST = ("PATH", "HOME", "UV_CACHE_DIR", "UV_PYTHON", "UV_INDEX_
 @dataclass
 class TeamEntry:
     name: str
-    repo: str
-    cmd: str
+    repo: str = ""
+    cmd: str = ""
+
+    @property
+    def laptop(self) -> bool:
+        return not self.repo
 
 
 def load_final(path: Path) -> tuple[int, int, list[TeamEntry]]:
     raw = tomllib.loads(path.read_text())
-    teams = [TeamEntry(t["name"], t["repo"], t["cmd"]) for t in raw.get("teams", [])]
+    teams = [
+        TeamEntry(t["name"], t.get("repo", ""), t.get("cmd", "uv run bot"))
+        for t in raw.get("teams", [])
+    ]
     return int(raw["seats"]), int(raw.get("seed", 0)), teams
+
+
+def _lan_ip() -> str:
+    # UDP connect sends nothing; it only asks the OS which interface routes outward.
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+        try:
+            s.connect(("10.255.255.255", 1))
+            return s.getsockname()[0]
+        except OSError:
+            return "127.0.0.1"
 
 
 def load_teams_keys(path: Path) -> dict[str, str]:
@@ -94,11 +116,18 @@ async def _kill_group(proc: asyncio.subprocess.Process, grace_s: float = 3.0) ->
         await proc.wait()
 
 
+async def _launched_ready(table, seats: set[int]) -> None:
+    while not seats <= table.ready_seats:
+        await asyncio.sleep(0.2)
+
+
 async def run_final(
     toml_path: Path, check: bool, port: int, budget_usd: float, linger: bool = True,
     min_window_s: float = 10.0, transition_s: float = 6.0,
     reveal_s: float = 1.5, beat_s: float = 2.5, manual_start: bool = True,
+    host: str = "127.0.0.1", ready_s: float = READY_BUDGET_S, fake_llm: bool = False,
 ) -> int:
+    fake_llm = fake_llm or check
     seats_n, seed, teams = load_final(toml_path)
     if not teams:
         raise SystemExit("final.toml has no [[teams]]")
@@ -106,6 +135,8 @@ async def run_final(
     bots_dir.mkdir(parents=True, exist_ok=True)
     checkouts: dict[str, Path] = {}
     for team in teams:
+        if team.laptop:
+            continue
         dest = bots_dir / team.name
         print(f"[final] clone {team.name} <- {team.repo}", flush=True)
         await asyncio.to_thread(_clone, team.repo, dest)
@@ -114,11 +145,14 @@ async def run_final(
         checkouts[team.name] = dest
 
     teams_toml_path = Path("teams.toml")
-    if not teams_toml_path.exists():
-        raise SystemExit("teams.toml not found (finale needs per-team Bifrost keys)")
-    teams_toml = load_teams_keys(teams_toml_path)
     team_names = [t.name for t in teams]
-    missing = [
+    if fake_llm:
+        teams_toml = load_teams_keys(teams_toml_path) if teams_toml_path.exists() else {}
+    elif not teams_toml_path.exists():
+        raise SystemExit("teams.toml not found (finale needs per-team Bifrost keys)")
+    else:
+        teams_toml = load_teams_keys(teams_toml_path)
+    missing = [] if fake_llm else [
         (name, teams_toml.get(name))
         for name in team_names
         if not (teams_toml.get(name) and os.environ.get(teams_toml[name]))
@@ -149,7 +183,7 @@ async def run_final(
     powerup_prices = {k: float(v) for k, v in raw_prices.get("powerups", {}).items()}
     state = AppState(
         config=config, n_tables=1, budget_usd=budget_usd, window_s=WINDOW_S,
-        runs_dir=Path("runs"), prices=prices, fake_llm=check,
+        runs_dir=Path("runs"), prices=prices, fake_llm=fake_llm,
         base_url=os.environ.get("BIFROST_BASE_URL"), teams_toml=teams_toml,
         auto_restart=False,
         min_window_s=min_window_s, transition_s=transition_s,
@@ -170,19 +204,34 @@ async def run_final(
     import uvicorn
 
     server = uvicorn.Server(
-        uvicorn.Config(create_app(state), host="127.0.0.1", port=port, log_level="warning")
+        uvicorn.Config(create_app(state), host=host, port=port, log_level="warning")
     )
     serve_task = asyncio.create_task(server.serve())
     await asyncio.sleep(1.0)
-    url = f"http://127.0.0.1:{port}"
+    local_host = "127.0.0.1" if host in ("0.0.0.0", "::", "") else host
+    url = f"http://{local_host}:{port}"
+    public_url = f"http://{_lan_ip() if host == '0.0.0.0' else host}:{port}"
     from .cli import _write_tokens_file  # noqa: PLC0415
 
     _write_tokens_file(state, Path("runs/final"))  # `ww start` reads the operator token here
     print(f"[final] spectator: {url}/?op={state.operator_token}", flush=True)
+    laptop_names = {t.name for t in teams if t.laptop}
+    laptop_seats = {s for s, name in enumerate(assignment) if name in laptop_names}
+    if laptop_seats:
+        handout = {
+            assignment[s]: {"WW_SERVER": public_url, "WW_TOKEN": tokens[s], "seat": s}
+            for s in sorted(laptop_seats)
+        }
+        handout_path = Path("runs/final/laptop_seats.json")
+        handout_path.write_text(json.dumps(handout, indent=1))
+        print(f"[final] laptop seats ({handout_path}); send each team its command:", flush=True)
+        for name, h in handout.items():
+            print(f"  {name} (seat {h['seat']}):", flush=True)
+            print(f"    WW_SERVER={h['WW_SERVER']} WW_TOKEN={h['WW_TOKEN']} uv run bot", flush=True)
 
-    def bot_cmd(seat: int) -> tuple[list[str] | str, Path | None, bool]:
+    def bot_cmd(seat: int, house: bool = False) -> tuple[list[str] | str, Path | None, bool]:
         name = assignment[seat]
-        if name == "house":
+        if house or name == "house":
             return [
                 sys.executable, "-m", "werewolf.housebots",
                 "--server", url, "--token", tokens[seat], "--brain", "baseline",
@@ -191,8 +240,8 @@ async def run_final(
         entry = next(t for t in teams if t.name == name)
         return entry.cmd, checkouts[name], True
 
-    async def launch(seat: int) -> asyncio.subprocess.Process:
-        cmd, cwd, shell = bot_cmd(seat)
+    async def launch(seat: int, house: bool = False) -> asyncio.subprocess.Process:
+        cmd, cwd, shell = bot_cmd(seat, house)
         env = _bot_env(url, tokens[seat])
         if shell:
             return await asyncio.create_subprocess_shell(
@@ -218,16 +267,20 @@ async def run_final(
         watchers[seat] = asyncio.ensure_future(_w())
 
     if check:
-        # smoke-start every seat against the running server, then exit
+        # smoke-start every launched seat against the running server, then exit
         for s in range(seats_n):
+            if s in laptop_seats:
+                continue
             procs[s] = await launch(s)
             watch_exit(s, procs[s])
         try:
-            await asyncio.wait_for(table.ready_event.wait(), timeout=READY_BUDGET_S)
-            print(f"[final] --check ok: all {seats_n} seats ready", flush=True)
+            await asyncio.wait_for(
+                _launched_ready(table, set(procs)), timeout=READY_BUDGET_S
+            )
+            print(f"[final] --check ok: all {len(procs)} launched seats ready", flush=True)
             rc = 0
         except TimeoutError:
-            missing = [s for s in range(seats_n) if s not in table.ready_seats]
+            missing = [s for s in procs if s not in table.ready_seats]
             print(f"[final] --check FAILED: seats not ready: {missing}", flush=True)
             rc = 1
         for p in procs.values():
@@ -240,24 +293,33 @@ async def run_final(
         return rc
 
     for s in range(seats_n):
-        print(f"[final] seat {s}: {assignment[s]} ({tokens[s][:6]}…)", flush=True)
+        where = "laptop" if s in laptop_seats else f"{tokens[s][:6]}…"
+        print(f"[final] seat {s}: {assignment[s]} ({where})", flush=True)
+        if s in laptop_seats:
+            continue
         procs[s] = await launch(s)
         watch_exit(s, procs[s])
 
-    # readiness barrier: every seat calls get_my_role, or 90s elapse
+    # readiness barrier: every seat calls get_my_role, or ready_s elapse
     try:
-        await asyncio.wait_for(table.ready_event.wait(), timeout=READY_BUDGET_S)
+        await asyncio.wait_for(table.ready_event.wait(), timeout=ready_s)
     except TimeoutError:
         pass
-    missing = [s for s in range(seats_n) if s not in table.ready_seats]
+    async with table.cond:
+        missing = [s for s in range(seats_n) if s not in table.ready_seats]
+        # Revoke every late seat's token at once, so no late bot checks in mid-replacement.
+        for s in missing:
+            state.token_index.pop(tokens[s], None)
+            tokens[s] = table.seats[s].token = secrets.token_urlsafe(12)
+            state.token_index[tokens[s]] = (table, s)
+            table.seats[s].house = "baseline"
+            table.seats[s].process_alive = True  # house bot isn't broke
     for s in missing:
         print(f"[final] seat {s} not ready; baseline house bot takes over", flush=True)
         proc = procs.get(s)
         if proc and proc.returncode is None:
             await _kill_group(proc)
-        async with table.cond:
-            table.seats[s].process_alive = True  # house bot isn't broke
-        procs[s] = await launch(s)
+        procs[s] = await launch(s, house=True)
         watch_exit(s, procs[s])
     async with table.cond:
         # Open the first window only after readiness/replacement is complete;
