@@ -26,9 +26,7 @@ def test_parse_opener_nominates_only_living_others() -> None:
 
 
 def test_wolves_never_nominate_partners() -> None:
-    from bot.agent import fallback_nominee, parse_opener
+    from bot.agent import parse_opener
 
     alive = [0, 1, 2, 3]
     assert parse_opener('{"chat": "x", "nominate": 2}', alive, 0, partners=[2]) == ("x", None, None)
-    for day in range(1, 6):
-        assert fallback_nominee(alive, 0, day, partners=[2]) in (1, 3)

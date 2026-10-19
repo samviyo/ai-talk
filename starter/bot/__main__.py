@@ -11,7 +11,7 @@ from mcp import ClientSession
 from mcp.client.streamable_http import streamable_http_client
 
 from .agent import (
-    BotConfig, LLMClient, decide_prompt, load_config, fallback_nominee, opener_prompt, parse_opener, parse_target,
+    BotConfig, LLMClient, decide_prompt, load_config, opener_prompt, parse_opener, parse_target,
 )
 
 # Error codes that mean "stop acting this window" rather than retry.
@@ -136,8 +136,6 @@ async def _discuss(session: ClientSession, llm, config: BotConfig,
                 post_args: dict = {"turn_id": turn_id}
                 if want == "opener":
                     chat, nominate, second = parse_opener(reply, alive, seat, partners)
-                    if nominate is None:
-                        nominate = fallback_nominee(alive, seat, int(turn.get("day") or 0), partners)
                     if nominate is not None:
                         post_args["nominate"] = nominate
                     if second is not None and any(n["target"] == second for n in nominations):
