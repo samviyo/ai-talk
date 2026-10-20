@@ -126,6 +126,7 @@ async def run_final(
     min_window_s: float = 10.0, transition_s: float = 6.0,
     reveal_s: float = 1.5, beat_s: float = 2.5, manual_start: bool = True,
     host: str = "127.0.0.1", ready_s: float = READY_BUDGET_S, fake_llm: bool = False,
+    forgers: int = 0,
 ) -> int:
     fake_llm = fake_llm or check
     seats_n, seed, teams = load_final(toml_path)
@@ -171,6 +172,10 @@ async def run_final(
     # One seat per team; baseline house bots fill the rest.
     assignment = team_names + ["house"] * (seats_n - len(team_names))
     rng.shuffle(assignment)
+    house_seats = [i for i, name in enumerate(assignment) if name == "house"]
+    if forgers > len(house_seats):
+        raise SystemExit(f"--forgers {forgers} > {len(house_seats)} house seats; raise seats")
+    forger_seats = set(house_seats[:forgers])
 
     from .llm import Prices
 
@@ -195,7 +200,7 @@ async def run_final(
         st.token = tokens[i]
         st.team = assignment[i]
         if assignment[i] == "house":
-            st.house = "baseline"  # finale house seats run the baseline brain
+            st.house = "forger" if i in forger_seats else "baseline"
     state.token_index = {tok: (table, s) for s, tok in enumerate(tokens)}
     if not manual_start:
         # manual_start leaves the constructor's placeholder lobby game parked
@@ -234,7 +239,7 @@ async def run_final(
         if house or name == "house":
             return [
                 sys.executable, "-m", "werewolf.housebots",
-                "--server", url, "--token", tokens[seat], "--brain", "baseline",
+                "--server", url, "--token", tokens[seat], "--brain", table.seats[seat].house,
                 "--seed", str(seed + seat),
             ], None, False
         entry = next(t for t in teams if t.name == name)

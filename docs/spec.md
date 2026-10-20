@@ -22,7 +22,7 @@ Everything runs on laptops. No hosted infra.
 |---|---|
 | `werewolf/engine/` | Pure rules engine. No I/O, no clock, seeded RNG |
 | `werewolf/server/` | MCP server, board, spectator SSE, LLM proxy, budget, table runner, finale launcher, CLI `ww` |
-| `werewolf/housebots/` | random, quiet, accuser, baseline |
+| `werewolf/housebots/` | random, quiet, accuser, baseline; forger (the expansion) |
 | `connect4/` | Part 1: engine, solver, puzzles, naive bot, eval harness |
 | `starter/` | Team kit: bot template, werewolf eval harness, `evals/` lock hook |
 
@@ -480,7 +480,7 @@ cmd = "uv run bot"                     # run inside the checkout
   `POST /admin/house` (operator token) before starting.
 - `ww tokens` prints seat tokens for a table.
 - `ww start --server URL` starts a manual-start table waiting in the lobby.
-- `ww final [--check] final.toml [--host H] [--port P] [--ready-s S] [--fake-llm] [--min-window-s S] [--transition-s S] [--reveal-s S] [--beat-s S] [--auto-start]` (pacing defaults: min 10s, transition 6s, reveal 1.5s, beat 2.5s; manual start on)
+- `ww final [--check] final.toml [--host H] [--port P] [--ready-s S] [--fake-llm] [--min-window-s S] [--transition-s S] [--reveal-s S] [--beat-s S] [--auto-start] [--forgers N]` (pacing defaults: min 10s, transition 6s, reveal 1.5s, beat 2.5s; manual start on)
 
 ## Connect Four (`connect4/`)
 
@@ -500,7 +500,7 @@ cmd = "uv run bot"                     # run inside the checkout
   but badly. Started with `uv run bot`, reading `WW_SERVER` and `WW_TOKEN`.
 - `evals/`: the team-facing checks from the talk doc, reading traces and engine logs.
 - `.claude/settings.json` with a PreToolUse hook that blocks edits under `evals/`.
-- `make eval`, `make practice` (spins up a local server and house bots).
+- `make eval`, `make practice` (spins up a local server and house bots; `FORGERS=N` seats forgers).
 - The built-in negative control (an always-vote-first-seat transcript) is a smoke
   test: it shows at least one gate catches an obviously bad bot; it does not show
   each scorer measures what it claims.

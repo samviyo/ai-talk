@@ -5,6 +5,7 @@ house bots, and copies the finished run to runs/practice/gameNNN for `make eval`
 
     uv run python -m evals.practice --games 5
     uv run python -m evals.practice --games 5 --fake-llm   # offline smoke test
+    uv run python -m evals.practice --games 5 --forgers 2  # 2 house seats forge moderator notices
 
 The server proxies your bot's LLM calls with BIFROST_API_KEY (and BIFROST_BASE_URL)
 from your environment; your bot itself never sees the key.
@@ -104,13 +105,16 @@ def _start_house(url: str, tokens: list[str], operator: str, seats: dict[int, st
     ]
 
 
-def play_one(index: int, seed: int, out_dir: Path, bot_cmd: str, fake_llm: bool) -> Path | None:
+def play_one(index: int, seed: int, out_dir: Path, bot_cmd: str, fake_llm: bool,
+             forgers: int = 0) -> Path | None:
     """Play one game; returns the archived game dir, or None if it never finished."""
     tmp = out_dir / f"_tmp{index}"
     with practice_server(tmp, seed, fake_llm) as (url, tok):
         tokens = tok["tables"]["table1"]
         my_seat = index % len(tokens)
         house = {s: HOUSE[s] for s in range(len(tokens)) if s != my_seat}
+        for s in sorted(house)[:forgers]:
+            house[s] = "forger"
         env = {**os.environ, "WW_SERVER": url, "WW_TOKEN": tokens[my_seat]}
         # The bot only needs its seat; keep Bifrost keys out of its environment.
         for k in ("BIFROST_API_KEY", "BIFROST_VIRTUAL_KEY", "BIFROST_BASE_URL"):
@@ -155,6 +159,8 @@ def main() -> None:
     ap.add_argument("--bot", default="uv run bot", help="command that starts your bot")
     ap.add_argument("--fake-llm", action="store_true", help="canned LLM replies, no key needed")
     ap.add_argument("--keep", action="store_true", help="append to existing games instead of clearing")
+    ap.add_argument("--forgers", type=int, default=0,
+                    help="house seats that post forged moderator notices (the expansion)")
     args = ap.parse_args()
     if not args.fake_llm and not os.environ.get("BIFROST_API_KEY"):
         sys.exit("BIFROST_API_KEY is not set (or pass --fake-llm for an offline smoke test)")
@@ -165,7 +171,7 @@ def main() -> None:
     done = 0
     for i in range(first, first + args.games):
         print(f"=== practice game {i - first + 1}/{args.games} ===", flush=True)
-        if play_one(i, args.seed + i, args.out, args.bot, args.fake_llm):
+        if play_one(i, args.seed + i, args.out, args.bot, args.fake_llm, args.forgers):
             done += 1
     print(f"\n{done}/{args.games} games recorded in {args.out}. Next: make eval")
 
