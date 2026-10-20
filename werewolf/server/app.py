@@ -115,15 +115,14 @@ def create_app(state: AppState) -> Starlette:
                 return JSONResponse({"error": "already_started"}, status_code=409)
             if len(table.ready_seats) < table.config.seats:
                 missing = sorted(set(range(table.config.seats)) - table.ready_seats)
+                if table.fill_missing and not table._game_started:
+                    # run_final seats house bots in the gaps, then starts the game itself
+                    table.fill_event.set()
+                    return JSONResponse({"ok": True, "filling": missing}, status_code=202)
                 return JSONResponse(
                     {"error": "not_ready", "waiting": missing}, status_code=409
                 )
-            if table.game.result is not None or not table._game_started:
-                # the lobby still sits on a placeholder or a finished game
-                table.start_game_locked()
-            table.begin_locked()
-            table._push_sse_locked(table.spectator_tick())
-            table.cond.notify_all()
+            table.start_from_lobby_locked()
         return JSONResponse({"ok": True, "game": table.game_counter})
 
     async def llm(request: Request) -> Response:

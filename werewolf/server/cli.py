@@ -229,9 +229,13 @@ def cmd_start(args: argparse.Namespace) -> int:
     resp = httpx.post(
         f"{args.server}/admin/start", params={"op": operator}, timeout=10
     )
-    if resp.status_code != 200:
+    if resp.status_code not in (200, 202):
         print(f"start refused: {resp.status_code} {resp.text}")
         return 1
+    if resp.status_code == 202:
+        missing = resp.json()["filling"]
+        print(f"seats {missing} not here: house bots take them, then the game starts")
+        return 0
     print(f"game {resp.json()['game']} started")
     return 0
 

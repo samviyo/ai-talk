@@ -43,6 +43,8 @@ class TeamEntry:
 
 
 def load_final(path: Path) -> tuple[int, int, list[TeamEntry]]:
+    if not path.exists():
+        raise SystemExit(f"{path} not found: write it first (seats, seed, one [[teams]] per team)")
     raw = tomllib.loads(path.read_text())
     teams = [
         TeamEntry(t["name"], t.get("repo", ""), t.get("cmd", "uv run bot"))
@@ -308,11 +310,13 @@ async def run_final(
         procs[s] = await launch(s)
         watch_exit(s, procs[s])
 
-    # readiness barrier: every seat calls get_my_role, or ready_s elapse
-    try:
-        await asyncio.wait_for(table.ready_event.wait(), timeout=ready_s)
-    except TimeoutError:
-        pass
+    # readiness barrier: every seat calls get_my_role, the operator starts early, or ready_s elapse
+    table.fill_missing = table.manual_start
+    barrier = [asyncio.ensure_future(table.ready_event.wait()),
+               asyncio.ensure_future(table.fill_event.wait())]
+    await asyncio.wait(barrier, timeout=ready_s, return_when=asyncio.FIRST_COMPLETED)
+    for b in barrier:
+        b.cancel()
     async with table.cond:
         missing = [s for s in range(seats_n) if s not in table.ready_seats]
         # Revoke every late seat's token at once, so no late bot checks in mid-replacement.
@@ -329,11 +333,21 @@ async def run_final(
             await _kill_group(proc)
         procs[s] = await launch(s, house=True)
         watch_exit(s, procs[s])
+    if missing and table.fill_event.is_set():
+        # The operator already pressed start: give the stand-ins a moment to check in.
+        try:
+            await asyncio.wait_for(table.ready_event.wait(), timeout=30.0)
+        except TimeoutError:
+            print("[final] stand-ins slow to check in; starting anyway", flush=True)
     async with table.cond:
         # Open the first window only after readiness/replacement is complete;
         # manual-start holds in the lobby for /admin/start instead.
+        table.fill_missing = False  # every seat is filled now; a later start is the plain one
         if not table.manual_start:
             table.unfreeze_locked()
+        elif table.fill_event.is_set() and not table._game_started:
+            table.start_from_lobby_locked()
+            print(f"[final] game {table.game_counter} started", flush=True)
         table.cond.notify_all()
 
     # wait for the game to finish: poll the table

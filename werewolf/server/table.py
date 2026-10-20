@@ -130,6 +130,9 @@ class Table:
         self.window_opened = time.monotonic()
         self.ready_seats: set[int] = set(range(config.seats))
         self.ready_event = asyncio.Event()
+        # The finale sets fill_missing; /admin/start then fills absent seats instead of refusing.
+        self.fill_missing = False
+        self.fill_event = asyncio.Event()
         self.need_role_check = False  # finale only: game waits for get_my_role
         # freeze holds the clock and turn serving until readiness/replacement completes
         self.frozen = False
@@ -231,6 +234,15 @@ class Table:
         """A seat called get_my_role; in the lobby that only reports readiness."""
         self.ready_seats.add(seat)
         self._push_sse_locked(self.lobby_state())
+
+    def start_from_lobby_locked(self) -> None:
+        """Open the lobby's game and unfreeze it; caller holds the lock."""
+        if self.game.result is not None or not self._game_started:
+            # the lobby still sits on a placeholder or a finished game
+            self.start_game_locked()
+        self.begin_locked()
+        self._push_sse_locked(self.spectator_tick())
+        self.cond.notify_all()
 
     def begin_locked(self) -> None:
         """Operator start: unfreeze the ready game; caller holds the lock."""

@@ -58,11 +58,14 @@ game 1's record.
    The same values are in `runs/game1/final/laptop_seats.json`. Tokens are new on every launch.
 3. Open the spectator URL on the projector. The lobby shows each seat as `joining…` or `ready`.
 4. DM each team its command line (the indented one, without the team label). They run it in `starter/`. The bot should print `seat N role ...`, then wait.
-5. When the lobby is all `ready` (or `--ready-s` has passed and house bots have filled the gaps), start the game:
+5. Start whenever you like; you don't have to wait for every team or for `--ready-s`:
 
    ```sh
    uv run ww start --server http://127.0.0.1:8046 --runs-dir runs/game1
    ```
+
+   If seats are still `joining…` it prints `seats [...] not here: house bots take them, then the game starts`,
+   and the game opens a few seconds later. A team that misses game 1 just joins game 2 with its new line.
 
 6. When the game ends, the board stays up until you Ctrl-C. The run is written under `runs/game1/`.
 7. Reveal the Forger and open the fix window (below). Relaunch with `--forgers 2 --runs-dir runs/game2`
@@ -83,15 +86,15 @@ The fix lives in `bot/` (escape or flatten board text, attribute it to its seat)
    `make practice N=1 FORGERS=2` in `starter/` as proof. DM game 2's lines meanwhile.
 3. **Game 2** proves it on the projector. Debrief on whose suite caught it, not just whose bot won.
 
-- Game 2 seats forgers in house seats: `uv run ww final final.toml ... --forgers 2`. With 10 teams in
-  12 seats both house seats become forgers; raise `seats` in `final.toml` for more.
+- Game 2 seats forgers in house seats: `uv run ww final final.toml ... --forgers 2`. Keep `seats = 12` with 6 teams:
+  6 baseline house bots fill the rest and 2 of them forge. Fewer seats still deal 3 wolves and tip the game.
 - The spectator labels them `house · forger`; players never see that label.
 
 ## When something goes wrong
 
 | Symptom | Meaning / fix |
 |---|---|
-| Team's bot prints `get_my_role failed: {'error': 'unauthorized'...}` | It joined after `--ready-s`; a house bot has the seat. Nothing to fix mid-game. |
+| Team's bot prints `get_my_role failed: {'error': 'unauthorized'...}` | It joined after the start (or `--ready-s`); a house bot has the seat. It joins game 2 with the new line. |
 | Team's bot can't connect | Wrong IP or blocked network; see the network check above. |
 | `teams.toml has no usable key env var for: X` | Export X's key env var, or fix the name in `final.toml`. |
 | A team's bot crashes mid-game | They can rerun the same command; until then their seat misses deadlines. |
