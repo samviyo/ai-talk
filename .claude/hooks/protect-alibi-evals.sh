@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
-# PreToolUse hook: while alibi/team_evals/.locked exists, block agent writes to the locked eval suite.
+# PreToolUse hook: while alibi/team_evals/.locked or alibi/golden/.locked exists, block agent writes to the locked eval suite.
 # Exit 2 blocks the tool call; the message on stderr is shown to the agent.
 set -euo pipefail
 
 payload=$(cat)
 
 root="$(cd "$(dirname "$0")/../.." && pwd)"
-locked="$root/alibi/team_evals/.locked"
-[ -f "$locked" ] || exit 0
+# Golden can be frozen from another scorer dir, so its own lock also arms the hook.
+[ -f "$root/alibi/team_evals/.locked" ] || [ -f "$root/alibi/golden/.locked" ] || exit 0
 
 # read -d '' instead of $(): the checker's regexes contain $() and backticks.
 read -r -d '' checker <<'PY' || true
@@ -33,6 +33,7 @@ PROTECTED_DIRS = [
 ]
 # The Python tool is the migration's source of truth, so it freezes with the evals.
 PROTECTED = PROTECTED_DIRS + [
+    "alibi/__init__.py",
     "alibi/checks.py",
     "alibi/scorers.py",
     ".claude/hooks/protect-alibi-evals.sh",

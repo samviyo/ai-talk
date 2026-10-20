@@ -130,6 +130,13 @@ def test_report_and_run_agree_with_the_tool(case_dir):
     assert len(texts) == len(report["failures"])
 
 
+def test_scorer_mutation_does_not_leak_into_golden_parse(case_dir):
+    (case_dir / "evals.py").write_text(SCORERS_SRC.replace(
+        'return output["verdicts"]', 'return output.pop("verdicts")'))
+    out = _stages(case_dir)
+    assert out["parse"]["rows"][0]["output"] == {"verdicts": {"c1": "achieved"}}
+
+
 def test_stages_with_no_gates(case_dir):
     (case_dir / "gates.toml").write_text("# nothing gated\n")
     out = _stages(case_dir)
@@ -151,6 +158,7 @@ def test_stages_with_no_gates(case_dir):
     ({"rows": [1, 2]}, {"rows": [1]}, 1),
     ({"a": 1}, {}, 1),
     ({}, {"a": 1}, 1),
+    ({"v": float("inf")}, {"v": float("inf")}, 0),
 ])
 def test_diff(want, got, n):
     assert len(migrate.diff(want, got)) == n
@@ -285,6 +293,12 @@ def test_lookup_port_passes_parity_and_fails_reveal(tmp_path, locked_evals, gold
                 "{'gated': [], 'values': {}, 'green': True, 'rows': [], 'failures': []})")
     port = _port(tmp_path, locked_evals, sabotage)
     assert migrate.parity(port, golden_dir, ["run"]) == 0
+    assert migrate.reveal(port, 4242, locked_evals) == 1
+
+
+def test_reveal_hides_the_expected_answer_from_the_port(tmp_path, locked_evals):
+    sabotage = "out = json.loads(Path(rows).with_name('run.json').read_text())"
+    port = _port(tmp_path, locked_evals, sabotage)
     assert migrate.reveal(port, 4242, locked_evals) == 1
 
 

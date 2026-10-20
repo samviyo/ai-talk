@@ -297,12 +297,27 @@ def test_lock_alibi_strips_write_bits_and_unlock_restores_them():
     "alibi/golden/checks/run.json",
     "alibi/golden/.locked",
     "alibi/migrate/__main__.py",
+    "alibi/__init__.py",
     "alibi/checks.py",
     "alibi/scorers.py",
 ])
 def test_migration_truth_is_blocked_for_edits(path):
     r = hook("Edit", file_path=str(ROOT / path), old_string="a", new_string="b")
     assert r.returncode == 2, r.stderr
+
+
+def test_golden_lock_alone_arms_the_hook(unlocked):
+    golden = ROOT / "alibi" / "golden"
+    if golden.exists():
+        pytest.skip("a real alibi/golden exists")
+    golden.mkdir()
+    try:
+        (golden / ".locked").touch()
+        assert hook("Edit", file_path=str(ROOT / "alibi/checks.py"),
+                    old_string="a", new_string="b").returncode == 2
+    finally:
+        (golden / ".locked").unlink()
+        golden.rmdir()
 
 
 @pytest.mark.usefixtures("locked")

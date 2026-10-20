@@ -39,12 +39,38 @@ pub fn score(arena: Allocator, parsed: Value) !Value {
     return .{ .object = out };
 }
 
-const py_whitespace = " \t\n\r\x0b\x0c\x1c\x1d\x1e\x1f\x85";
+// Code points where Python's str.isspace() is true, so str.strip() removes them.
+fn isPySpace(c: u21) bool {
+    return switch (c) {
+        0x09...0x0d, 0x1c...0x20, 0x85, 0xa0, 0x1680, 0x2000...0x200a, 0x2028, 0x2029, 0x202f, 0x205f, 0x3000 => true,
+        else => false,
+    };
+}
+
+fn pyStrip(s: []const u8) []const u8 {
+    var start: usize = 0;
+    while (start < s.len) {
+        const n = std.unicode.utf8ByteSequenceLength(s[start]) catch break;
+        if (start + n > s.len) break;
+        const c = std.unicode.utf8Decode(s[start .. start + n]) catch break;
+        if (!isPySpace(c)) break;
+        start += n;
+    }
+    var end = s.len;
+    while (end > start) {
+        var i = end - 1;
+        while (i > start and s[i] & 0xc0 == 0x80) i -= 1;
+        const c = std.unicode.utf8Decode(s[i..end]) catch break;
+        if (!isPySpace(c)) break;
+        end = i;
+    }
+    return s[start..end];
+}
 
 fn normLabel(arena: Allocator, label: ?Value) ![]const u8 {
     const v = label orelse return "";
     if (v != .string) return "";
-    return std.ascii.allocLowerString(arena, std.mem.trim(u8, v.string, py_whitespace));
+    return std.ascii.allocLowerString(arena, pyStrip(v.string));
 }
 
 fn get(obj: Value, key: []const u8) ?Value {

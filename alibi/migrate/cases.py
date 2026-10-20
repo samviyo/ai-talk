@@ -37,7 +37,7 @@ def _exact(row, rng):
 
 def _relabel_case(row, rng):
     out = _deep(row["expected"])
-    style = rng.choice([str.upper, str.capitalize, lambda s: f"  {s}\t"])
+    style = rng.choice([str.upper, str.capitalize, lambda s: f"  {s}\t", lambda s: f"\u00a0{s}\u3000"])
     out["verdicts"] = {c: style(v) for c, v in out["verdicts"].items()}
     return out
 

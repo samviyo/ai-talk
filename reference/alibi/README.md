@@ -36,3 +36,7 @@ reveal's point.
 
 Known quirk: `score_receipts_correct` returns 0.0 when every claim is `unknown` (nothing
 is gradable), so a perfect answer on such a row fails its gate. Ports reproduce it.
+
+Limit: the hook stops agent edits, not what the team's binary does when it runs. A port
+could rewrite `alibi/checks.py` or the goldens itself. The reveal trusts only the Python
+tool, so before it check `git diff main -- alibi/*.py alibi/migrate` is empty.

@@ -9,6 +9,7 @@ run    : rows.jsonl + gates.toml -> score and report merged into one object
 
 from __future__ import annotations
 
+import copy
 import math
 from pathlib import Path
 from typing import Any
@@ -38,7 +39,8 @@ def stages(rows_path: Path, gates_dir: Path, scorers: list[Scorer]) -> dict[str,
     """All four canonical outputs from one pass of the Python tool."""
     parsed = parse(rows_path, gates_dir)
     gates = {n: Gate(min=g["min"], min_n=g["min_n"]) for n, g in parsed["gates"].items()}
-    result = checks.evaluate(scorers, gates, parsed["rows"])
+    # Scorers may mutate rows in place, so they get a copy and golden parse stays as read.
+    result = checks.evaluate(scorers, gates, copy.deepcopy(parsed["rows"]))
     score = {
         "gated": result["gated"],
         "values": {s: {rid: _value(v) for rid, v in vals.items()}

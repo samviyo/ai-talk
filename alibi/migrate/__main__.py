@@ -48,7 +48,7 @@ def diff(want: Any, got: Any, path: str = "$") -> list[str]:
     if isinstance(want, bool) or isinstance(got, bool):
         return [] if want is got else [f"{path}: want {json.dumps(want)}, got {json.dumps(got)}"]
     if isinstance(want, (int, float)) and isinstance(got, (int, float)):
-        return [] if abs(want - got) <= TOLERANCE else [f"{path}: want {want!r}, got {got!r}"]
+        return [] if want == got or abs(want - got) <= TOLERANCE else [f"{path}: want {want!r}, got {got!r}"]
     if isinstance(want, dict) and isinstance(got, dict):
         out = []
         for k in want:
@@ -187,10 +187,14 @@ def parity(binary: Path, golden_dir: Path, stages: list[str]) -> int:
 
 def reveal(binary: Path, seed: int, evals_dir: Path) -> int:
     print(f"\n== reveal: {binary.name} vs Python on held-out seed {seed} ==")
-    with tempfile.TemporaryDirectory() as tmp:
-        case_dir = Path(tmp) / f"heldout"
-        _write_case(case_dir, cases.dump(cases.generate(seed)), evals_dir)
-        want = json.loads((case_dir / "run.json").read_text())
+    with tempfile.TemporaryDirectory() as truth, tempfile.TemporaryDirectory() as tmp:
+        _write_case(Path(truth) / "heldout", cases.dump(cases.generate(seed)), evals_dir)
+        want = json.loads((Path(truth) / "heldout" / "run.json").read_text())
+        # The port sees only the inputs, never the expected outputs beside them.
+        case_dir = Path(tmp) / "heldout"
+        case_dir.mkdir()
+        for name in ("rows.jsonl", "gates.toml"):
+            shutil.copyfile(Path(truth) / "heldout" / name, case_dir / name)
         print(f"  {len(want['rows'])} fresh rows; Python verdict "
               f"{'GREEN' if want['green'] else 'RED'}")
         return _verdict(check_case(binary, case_dir, "run", want))
