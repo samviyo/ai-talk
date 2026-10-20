@@ -65,7 +65,16 @@ ZIG_BIN_FLAG = $(if $(ALIBI_ZIG_BIN),--bin $(ALIBI_ZIG_BIN),)
 # The port runs fixed scorers we ship, so teams only write Zig.
 ZIG_SCORERS = ALIBI_TEAM_EVALS_DIR=alibi/zig/scorers
 
-.PHONY: zig zig-build golden parity parity-parse parity-score parity-report reveal-parity unlock-golden fake-port
+.PHONY: setup zig zig-build golden parity parity-parse parity-score parity-report reveal-parity unlock-golden fake-port
+
+# One command for a fresh laptop: Python deps, the pinned Zig, and a build of the stubs.
+setup:
+	@command -v uv >/dev/null || { echo "uv not found: install it from https://docs.astral.sh/uv/"; exit 1; }
+	uv sync
+	cd starter && uv sync
+	uv run python -m alibi.migrate zig
+	uv run python -m alibi.migrate build
+	@echo "setup done: next is make golden at the hand-off"
 
 zig:
 	uv run python -m alibi.migrate zig

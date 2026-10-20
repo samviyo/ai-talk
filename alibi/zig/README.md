@@ -11,7 +11,7 @@ the end (`ALIBI_HELDOUT_SEED=<seed> make reveal-parity`). You have 20 minutes.
 ## Setup (once)
 
 ```sh
-make zig        # pinned Zig 0.16.0 into .tools/
+make setup      # uv sync, pinned Zig 0.16.0 into .tools/, build the stubs
 make golden     # run the Python tool on today's inputs, freeze the answers, lock them
 ```
 
