@@ -29,4 +29,7 @@ fi
 
 umask 077
 printf 'BIFROST_BASE_URL=%s\nBIFROST_API_KEY=%s\n' "$BASE" "$key" > "$FILE"
-echo "bifrost: key works, saved to $FILE"
+echo "bifrost: key accepted, saved to $FILE"
+
+# One real chat call with the bot's model, so a key without model access fails now, not at make check.
+(cd starter && BIFROST_BASE_URL="$BASE" BIFROST_API_KEY="$key" uv run python -m bot.smoke)
