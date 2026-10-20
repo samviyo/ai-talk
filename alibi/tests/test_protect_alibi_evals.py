@@ -230,8 +230,7 @@ def test_other_protected_paths_are_blocked_for_edits():
                    "content": "x"}),
         ("Write", {"file_path": str(ROOT / ".claude" / "settings.json"),
                    "content": "x"}),
-        ("Edit", {"file_path": str(ROOT / "reference" / "alibi" / "organiser_evals.py")
-                  .replace("alibi", "alibi/..//alibi"),
+        ("Edit", {"file_path": str(ROOT) + "/reference/alibi/..//alibi/organiser_evals.py",
                   "old_string": "a", "new_string": "b"}),
     ]
     for tool, tool_input in cases:
@@ -291,3 +290,38 @@ def test_lock_alibi_strips_write_bits_and_unlock_restores_them():
         for p, mode in originals.items():
             os.chmod(p, mode)
         _restore_lock(existed, content)
+
+
+@pytest.mark.usefixtures("locked")
+@pytest.mark.parametrize("path", [
+    "alibi/golden/checks/run.json",
+    "alibi/golden/.locked",
+    "alibi/migrate/__main__.py",
+    "alibi/checks.py",
+    "alibi/scorers.py",
+])
+def test_migration_truth_is_blocked_for_edits(path):
+    r = hook("Edit", file_path=str(ROOT / path), old_string="a", new_string="b")
+    assert r.returncode == 2, r.stderr
+
+
+@pytest.mark.usefixtures("locked")
+def test_port_sources_stay_editable():
+    assert hook("Edit", file_path=str(ROOT / "alibi/zig/src/score.zig"),
+                old_string="a", new_string="b").returncode == 0
+
+
+@pytest.mark.usefixtures("locked")
+@pytest.mark.parametrize("cmd,code", [
+    ("alibi/zig/zig-out/bin/alibi-check run alibi/golden/checks/rows.jsonl "
+     "alibi/golden/checks/gates.toml", 0),
+    ("./alibi/zig/zig-out/bin/alibi-check score alibi/golden/practice/parse.json", 0),
+    ("make parity", 0),
+    ("make parity-score && make zig-build", 0),
+    ("alibi/zig/zig-out/bin/alibi-check run x y > alibi/golden/checks/run.json", 2),
+    ("cp out.json alibi/golden/checks/run.json", 2),
+    ("make unlock-golden", 2),
+    ("chmod -R u+w alibi/golden", 2),
+])
+def test_migration_commands(cmd, code):
+    assert bash(cmd).returncode == code

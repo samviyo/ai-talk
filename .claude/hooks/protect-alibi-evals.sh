@@ -24,15 +24,22 @@ tool = payload.get("tool_name", "")
 ti = payload.get("tool_input") or {}
 cwd = ti.get("cwd") or root
 
-PROTECTED = [
+PROTECTED_DIRS = [
     "alibi/team_evals",
     "alibi/datasets",
     "reference/alibi",
+    "alibi/golden",
+    "alibi/migrate",
+]
+# The Python tool is the migration's source of truth, so it freezes with the evals.
+PROTECTED = PROTECTED_DIRS + [
+    "alibi/checks.py",
+    "alibi/scorers.py",
     ".claude/hooks/protect-alibi-evals.sh",
     ".claude/settings.json",
 ]
 PROT_ABS = {os.path.normpath(os.path.join(root, p)) for p in PROTECTED}
-PROT_DIRS = [os.path.normpath(os.path.join(root, p)) for p in PROTECTED[:3]]
+PROT_DIRS = [os.path.normpath(os.path.join(root, p)) for p in PROTECTED_DIRS]
 
 # Every dir above a protected path (alibi, reference, .claude, repo root, ...) counts too.
 ancestors = set()
@@ -63,6 +70,8 @@ SED_RO = re.compile(r"""^sed\s+-n\s+'?\d+(,(\d+|\$))?p'?(\s+[^\s'"-][^\s'"]*)+\s
 GIT_RO = re.compile(r"^git\s+(diff|log|status|show)(\s|$)")
 ENV = r"^(\w+=\S*\s+)*"  # e.g. ALIBI_HELDOUT_SEED=$seed make eval-alibi
 MAKE_EVAL = re.compile(ENV + r"make(\s+-\w+)*\s+(eval-alibi|check-alibi)(\s+[\w./:=+-]+)*(\s|$)")
+# Running the port on golden inputs reads them; only the binary's stdout is written.
+PORT_RUN = re.compile(r"^(\./)?alibi/zig/zig-out/bin/alibi-check(\s+[\w./-]+)*\s*$")
 PY_EVAL = re.compile(ENV + r"(uv\s+run\s+)?python3?\s+-m\s+alibi\.(evals|checks)(\s+[\w./:=+-]+)*(\s|$)")
 # Allowlisted flags only: --basetemp, --junitxml, -p, -c, -o and friends can write paths.
 PYTEST = re.compile(ENV + r"(uv\s+run\s+)?(python3?\s+-m\s+)?pytest"
@@ -144,7 +153,7 @@ def ok(segment):
     if seg_tokens(segment) is None:
         return False
     return bool(READ_ONLY.match(segment) or SED_RO.match(segment) or GIT_RO.match(segment)
-                or MAKE_EVAL.match(segment) or PY_EVAL.match(segment)
+                or MAKE_EVAL.match(segment) or PY_EVAL.match(segment) or PORT_RUN.match(segment)
                 or PYTEST.match(segment))
 
 
@@ -164,8 +173,8 @@ if tool == "Bash":
     cmd = ti.get("command", "")
     if not cmd:
         sys.exit(0)
-    # unlock-alibi stays blocked in any form, flags and all.
-    if re.search(r"unlock-alibi", cmd):
+    # unlock-alibi and unlock-golden stay blocked in any form, flags and all.
+    if re.search(r"unlock-(alibi|golden)", cmd):
         blocked()
     SEP = re.compile(r"(&&|\|\||;|&|\||\n)")
     parts = [p for p in SEP.split(cmd)]

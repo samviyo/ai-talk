@@ -25,3 +25,14 @@ suite on the held-out split, and fails if either is red:
 ```
 ALIBI_HELDOUT_SEED=<announced> make reveal-alibi ALIBI_BOT=<bot>
 ```
+
+## Zig migration (Part 1 hand-off)
+
+`zig_port/` is a full Zig port of check-alibi with these reference scorers, so the
+tooling can be proven end to end: `uv run pytest reference/alibi/zig_port -q` (needs
+`make zig`). `zig_port/fake_port.py` (`make fake-port`) builds a lookup-table "port" from
+`alibi/golden/`: it passes `make parity` and fails `make reveal-parity`, which is the
+reveal's point.
+
+Known quirk: `score_receipts_correct` returns 0.0 when every claim is `unknown` (nothing
+is gradable), so a perfect answer on such a row fails its gate. Ports reproduce it.

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import math
 import sys
 from pathlib import Path
 
@@ -178,12 +179,83 @@ def test_main_prints_per_row_lines_and_scorer_verdicts(tmp_path, capsys, team_sc
     assert "caught" in out
 
 
-def test_unknown_label_is_a_failure(tmp_path):
+def _const(value):
+    return lambda input, output, expected=None, **kw: value
+
+
+def test_unknown_label_is_a_failure():
     row = _row("chk-x", CORRECT_OUTPUT, "mystery", "bad label")
-    failures = checks.run_checks(load_scorers(), {"s": Gate(min=1.0)}, [row],
-                                 print_rows=False)
-    # No scorers loaded -> no gated ones -> "no gates yet".
-    assert failures == ["no gates yet"]
+    scorer = Scorer(name="score_s", fn=_const(1.0))
+    result = checks.evaluate([scorer], {"score_s": Gate(min=1.0)}, [row])
+    assert result["rows"][0]["ok"] is False
+    assert [f["kind"] for f in result["failures"]] == ["unknown_label", "constant"]
+
+
+def test_evaluate_runs_only_gated_scorers_in_load_order():
+    calls = []
+
+    def spy(name):
+        def fn(input, output, expected=None, **kw):
+            calls.append(name)
+            return 1.0
+        return fn
+
+    scorers = [Scorer("score_a", spy("a")), Scorer("score_b", spy("b")), Scorer("score_c", spy("c"))]
+    gates = {"score_c": Gate(min=0.5), "score_a": Gate(min=0.5), "score_missing": Gate(min=0.5)}
+    result = checks.evaluate(scorers, gates, ROWS[:1])
+    assert result["gated"] == ["score_a", "score_c"]
+    assert calls == ["a", "c"]
+
+
+def test_evaluate_records_none_nan_and_values_per_row():
+    def picky(input, output, expected=None, **kw):
+        if output == "a raw string":
+            raise KeyError("verdicts")
+        return None if output.get("receipts", {}).get("c1") == ["R-101"] else 0.25
+
+    gates = {"score_p": Gate(min=0.2)}
+    result = checks.evaluate([Scorer("score_p", picky)], gates, ROWS)
+    values = result["values"]["score_p"]
+    assert values["chk-1"] == 0.25 and values["chk-3"] is None
+    assert math.isnan(values["chk-4"])
+    kinds = [(f["kind"], f["row"], f["scorer"]) for f in result["failures"]]
+    assert kinds == [("slips_through", "chk-3", None),
+                     ("raised", "chk-4", "score_p", ),
+                     ("slips_through", "chk-4", None)]
+    assert "KeyError" in result["failures"][1]["text"]
+    assert [r["ok"] for r in result["rows"]] == [True, True, False, False]
+
+
+def test_evaluate_one_catching_scorer_is_enough_on_a_wrong_row():
+    scorers = [Scorer("score_hi", _const(1.0)),
+               Scorer("score_lo", lambda input, output, expected=None, **kw:
+                      0.0 if output == "a raw string" else 1.0)]
+    gates = {"score_hi": Gate(min=1.0), "score_lo": Gate(min=1.0)}
+    result = checks.evaluate(scorers, gates, ROWS)
+    by_id = {r["id"]: r for r in result["rows"]}
+    assert by_id["chk-4"]["ok"] is True and by_id["chk-4"]["caught"] == ["score_lo"]
+    assert by_id["chk-3"]["ok"] is False
+    assert ("constant", "score_hi") in [(f["kind"], f["scorer"]) for f in result["failures"]]
+    assert ("constant", "score_lo") not in [(f["kind"], f["scorer"]) for f in result["failures"]]
+
+
+def test_none_everywhere_is_not_constant():
+    result = checks.evaluate([Scorer("score_n", _const(None))], {"score_n": Gate(min=1.0)}, ROWS)
+    assert "constant" not in [f["kind"] for f in result["failures"]]
+
+
+def test_bool_returns_count_as_one_and_zero():
+    scorer = Scorer("score_b", lambda input, output, expected=None, **kw: isinstance(output, dict))
+    result = checks.evaluate([scorer], {"score_b": Gate(min=1.0)}, ROWS)
+    assert result["values"]["score_b"] == {"chk-1": 1.0, "chk-2": 1.0, "chk-3": 1.0, "chk-4": 0.0}
+
+
+def test_run_checks_text_matches_evaluate_failures():
+    scorer = Scorer("score_x", _const(0.5))
+    gates = {"score_x": Gate(min=0.8)}
+    texts = checks.run_checks([scorer], gates, ROWS, print_rows=False)
+    assert texts == [f["text"] for f in checks.evaluate([scorer], gates, ROWS)["failures"]]
+    assert "must pass (got 0.50, min 0.80)" in texts[0]
 
 
 def test_gate_min_boundary_on_wrong_row():
