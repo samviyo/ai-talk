@@ -1,9 +1,9 @@
 # Port check-alibi to Zig
 
-Your scorers are locked. Next job: port the tool that checks them, `make check-alibi`
-(`alibi/checks.py`, your `alibi/team_evals/*.py` and `alibi/scorers.py`), from Python to Zig.
-Nobody in the room reads Zig, so nobody can review the port. The golden outputs are the
-only reviewer.
+Get your agents to port a small Python tool to Zig: `check-alibi` (`alibi/checks.py`,
+`alibi/scorers.py` and the fixed scorers in `alibi/zig/scorers/`). It reads labelled rows and
+gates, scores every row, and says GREEN or RED. Nobody in the room reads Zig, so nobody can
+review the port. The golden outputs are the only reviewer.
 
 **Done** = `make parity` is green, and it stays green on fresh held-out inputs revealed at
 the end (`ALIBI_HELDOUT_SEED=<seed> make reveal-parity`). You have 20 minutes.
@@ -15,9 +15,8 @@ make zig        # pinned Zig 0.16.0 into .tools/
 make golden     # run the Python tool on today's inputs, freeze the answers, lock them
 ```
 
-`make golden` refuses to run until your scorers are locked (`make lock-alibi`), and once it
-has run it refuses to run again. Like your scorers, `alibi/golden/` is locked: agents cannot
-edit it, and they cannot edit the Python tool either.
+`make golden` runs once; after that it refuses to run again. `alibi/golden/` is then locked:
+agents cannot edit it, the Python tool, or the scorers in `alibi/zig/scorers/`.
 
 ## The port
 
@@ -27,7 +26,7 @@ its own:
 | File | Command | Check | Ports |
 |---|---|---|---|
 | `parse.zig` | `alibi-check parse <rows.jsonl> <gates.toml>` | `make parity-parse` | `load_check_rows`, `load_gates` |
-| `score.zig` | `alibi-check score <parse.json>` | `make parity-score` | your `score_*` functions, `wrapped` |
+| `score.zig` | `alibi-check score <parse.json>` | `make parity-score` | the `score_*` functions in `alibi/zig/scorers/`, `wrapped` |
 | `report.zig` | `alibi-check report <parse.json> <score.json>` | `make parity-report` | the rule in `evaluate` |
 | `main.zig` | `alibi-check run <rows.jsonl> <gates.toml>` | `make parity` | join-up: parse, then score, then report |
 

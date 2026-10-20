@@ -1,5 +1,5 @@
 //! Stage 2, score: run every gated scorer on every row.
-//! Python source: your scorers in alibi/team_evals/*.py, run through `wrapped` in alibi/scorers.py.
+//! Python source: the scorers in alibi/zig/scorers/scorers.py, run through `wrapped` in alibi/scorers.py.
 const std = @import("std");
 
 const Allocator = std.mem.Allocator;
@@ -10,9 +10,9 @@ pub const ScorerFn = *const fn (arena: Allocator, input: Value, output: Value, e
 
 pub const Scorer = struct { name: []const u8, func: ScorerFn };
 
-/// Your scorers, in the order Python loads them: by module file name, then by function name.
+/// The scorers, in the order Python loads them: by module file name, then by function name.
 pub const scorers = [_]Scorer{
-    // TODO: port each score_* from alibi/team_evals/, e.g. .{ .name = "score_x", .func = scoreX },
+    // TODO: port each score_* from alibi/zig/scorers/scorers.py, e.g. .{ .name = "score_x", .func = scoreX },
 };
 
 /// Returns {"gated": [name], "values": {scorer: {row_id: number | null | "error"}}}.

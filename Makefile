@@ -62,6 +62,8 @@ unlock-alibi:
 # Part 1 migration: port check-alibi to Zig; frozen golden outputs are the only reviewer.
 ALIBI_ZIG_BIN ?=
 ZIG_BIN_FLAG = $(if $(ALIBI_ZIG_BIN),--bin $(ALIBI_ZIG_BIN),)
+# The port runs fixed scorers we ship, so teams only write Zig.
+ZIG_SCORERS = ALIBI_TEAM_EVALS_DIR=alibi/zig/scorers
 
 .PHONY: zig zig-build golden parity parity-parse parity-score parity-report reveal-parity unlock-golden fake-port
 
@@ -72,7 +74,7 @@ zig-build:
 	uv run python -m alibi.migrate build
 
 golden:
-	uv run python -m alibi.migrate golden
+	$(ZIG_SCORERS) uv run python -m alibi.migrate golden
 
 parity:
 	uv run python -m alibi.migrate parity $(ZIG_BIN_FLAG)
@@ -87,7 +89,7 @@ parity-report:
 	uv run python -m alibi.migrate parity --stage report $(ZIG_BIN_FLAG)
 
 reveal-parity:
-	uv run python -m alibi.migrate reveal $(ZIG_BIN_FLAG)
+	$(ZIG_SCORERS) uv run python -m alibi.migrate reveal $(ZIG_BIN_FLAG)
 
 unlock-golden:
 	chmod -R u+w alibi/golden

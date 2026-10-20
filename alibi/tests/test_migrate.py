@@ -306,3 +306,12 @@ def test_stage_args_feed_golden_upstream_outputs(tmp_path):
     assert migrate.stage_args("score", tmp_path) == ["score", str(tmp_path / "parse.json")]
     assert migrate.stage_args("report", tmp_path)[1:] == [str(tmp_path / "parse.json"),
                                                            str(tmp_path / "score.json")]
+
+
+def test_shipped_zig_scorers_match_the_reference_port():
+    # The reference Zig port implements reference/alibi's scorers, so the shipped copy must not drift.
+    root = Path(__file__).resolve().parents[2]
+    shipped = (root / "alibi/zig/scorers/scorers.py").read_text().split("\n", 1)[1]
+    reference = (root / "reference/alibi/organiser_evals.py").read_text().split("\n", 1)[1]
+    assert shipped == reference
+    assert (root / "alibi/zig/scorers/.locked").exists()

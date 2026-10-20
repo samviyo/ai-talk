@@ -30,6 +30,7 @@ PROTECTED_DIRS = [
     "reference/alibi",
     "alibi/golden",
     "alibi/migrate",
+    "alibi/zig/scorers",
 ]
 # The Python tool is the migration's source of truth, so it freezes with the evals.
 PROTECTED = PROTECTED_DIRS + [

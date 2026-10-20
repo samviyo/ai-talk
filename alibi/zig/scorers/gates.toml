@@ -1,0 +1,6 @@
+# Gates for the fixed scorers the Zig port runs; a copy of reference/alibi/gates.toml.
+[score_verdicts_correct]
+min = 1.0
+
+[score_receipts_correct]
+min = 1.0
