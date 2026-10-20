@@ -10,7 +10,7 @@ evals they write themselves. Everything runs on laptops; there is no hosted infr
 |---|---|
 | `werewolf/engine/` | Pure rules engine: no I/O, no clock, seeded RNG |
 | `werewolf/server/` | MCP server, board, spectator SSE, LLM proxy, budget, finale, `ww` CLI |
-| `werewolf/housebots/` | Rule-based house bots: `random`, `quiet`, `accuser`, `baseline` (no LLM calls) |
+| `werewolf/housebots/` | Rule-based house bots: `random`, `quiet`, `accuser`, `baseline`, plus the `forger` expansion (no LLM calls) |
 | `connect4/` | Part 1 exercise: engine, solver, puzzles, naive bot, eval harness |
 | `alibi/` | "The Agent's Alibi" transcript-audit exercise: fixtures, bots, harness, scorer checks |
 | `reference/alibi/` | Organiser-only reference scorers and check notes; teams never see these |

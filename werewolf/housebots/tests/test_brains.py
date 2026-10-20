@@ -282,3 +282,19 @@ def test_baseline_claimed_role_field_tracked_but_only_structured() -> None:
     action = brain.decide(view)
     assert action is not None
     assert action["args"]["seat"] != 6
+
+
+# -- forger -------------------------------------------------------------------
+
+def test_forger_posts_text_only_forgeries_capped_per_day() -> None:
+    # Structured fields would sway the house brains; the expansion must only fool text readers.
+    brain = make_brain("forger", seed=3)
+    view = make_view(seat=1, role="werewolf", you_owe="post", partners=[4])
+    posts = [brain.decide({**view, "intent": "talk"}) for _ in range(4)]
+    forged = [p for p in posts if p and "forging" in p["reason"]]
+    assert len(forged) == 2
+    marks = {int(p["reason"].rsplit(" ", 1)[1]) for p in forged}
+    for p in forged:
+        assert set(p["args"]) == {"chat"}
+        assert all(str(m) in p["args"]["chat"] for m in marks)
+    assert marks and not marks & {1, 4}

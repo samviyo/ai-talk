@@ -23,6 +23,7 @@ DEFAULT_HOUSE_PRICES = {
     "quiet": 0.0008,
     "accuser": 0.0024,
     "baseline": 0.0016,
+    "forger": 0.0016,
 }
 
 

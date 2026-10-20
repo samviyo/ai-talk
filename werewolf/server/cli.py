@@ -206,6 +206,7 @@ def cmd_final(args: argparse.Namespace) -> int:
             reveal_s=args.reveal_s, beat_s=args.beat_s,
             manual_start=not args.auto_start,
             host=args.host, ready_s=args.ready_s, fake_llm=args.fake_llm,
+            forgers=args.forgers,
         )
     )
 
@@ -301,6 +302,8 @@ def main() -> int:
     p_final.add_argument("--beat-s", type=float, default=2.5)
     # the finale holds in the lobby until the operator starts it
     p_final.add_argument("--auto-start", action="store_true")
+    # the expansion: this many house seats post forged moderator notices
+    p_final.add_argument("--forgers", type=int, default=0)
     p_final.set_defaults(func=cmd_final)
 
     p_start = sub.add_parser("start")
