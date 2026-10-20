@@ -239,7 +239,6 @@ class Dispatcher:
                         # Between games: the next one opens on get_my_role readiness.
                         return {"status": "idle", "result": g.result}
                     return {"status": "over", "result": g.result}
-                announcements = table.announcements_locked(seat)
                 st = table.seats[seat]
                 if since is None:
                     st.since["news"] = len(g.events(seat))
@@ -268,7 +267,7 @@ class Dispatcher:
                         "round": g.round,
                         "you_owe": owe,
                         "legal_targets": [],
-                        "announcements": announcements,
+                        "announcements": table.announcements_locked(seat),
                         "posts_left": g.posts_left(seat),
                         "deadline_s": round(table.deadline() - time.monotonic(), 2),
                         **owe_extra,
@@ -298,7 +297,7 @@ class Dispatcher:
                             "you_owe": "discuss",
                             "legal_targets": [],
                             "alive": g.alive(),
-                            "announcements": announcements,
+                            "announcements": table.announcements_locked(seat),
                             "mentions": mentions,
                             "board_cursor": cursor,
                             "posts_left": g.posts_left(seat),
@@ -324,7 +323,7 @@ class Dispatcher:
                             "round": g.round,
                             "you_owe": owe,
                             "legal_targets": g.legal_targets(seat),
-                            "announcements": announcements,
+                            "announcements": table.announcements_locked(seat),
                             "deadline_s": round(table.deadline() - time.monotonic(), 2),
                         }
                         if news:

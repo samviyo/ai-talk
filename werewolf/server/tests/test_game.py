@@ -13,7 +13,7 @@ import pytest
 
 from werewolf.housebots.runner import run_bot
 
-from .conftest import start_server, wait_turn
+from .conftest import mcp_call, start_server, wait_turn
 
 BRAINS = ["baseline", "baseline", "accuser", "quiet", "random", "baseline", "baseline"]
 
@@ -168,5 +168,20 @@ async def test_call_budget_exceeded(tmp_path: Path):
             if last.get("error") == "call_budget_exceeded":
                 break
         assert last is not None and last.get("error") == "call_budget_exceeded", last
+    finally:
+        await srv.stop()
+
+
+async def test_idle_polls_keep_announcements_for_the_next_turn(tmp_path: Path):
+    srv = await start_server(tmp_path, seed=7, window_s=1.0, discussion_s=1.0)
+    try:
+        roles = srv.state.tables[0].game._roles
+        villager = roles.index("villager")
+        # A villager owes nothing at night, so this poll times out without a turn.
+        idle = await mcp_call(srv.url, srv.token(villager), "wait_for_turn", {"timeout_s": 0.2})
+        assert not idle.get("you_owe"), idle
+        turn = await wait_turn(srv.url, srv.token(villager))
+        kinds = [(a["kind"], a.get("phase")) for a in turn["announcements"]]
+        assert ("phase", "night") in kinds, kinds
     finally:
         await srv.stop()

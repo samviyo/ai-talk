@@ -601,6 +601,10 @@ class ForgerBrain(BaselineBrain):
             return {"tool": "vote", "args": {"seat": target}, "reason": "backing my forgery"}
         return super()._vote(view)
 
+    def maybe_buy(self, view: View) -> Action | None:
+        # A broke seat can't post, and a forger that can't post stops forging.
+        return None
+
 
 BRAINS = {
     "random": RandomBrain,

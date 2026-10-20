@@ -31,16 +31,22 @@ in time is replaced by a house bot too.
    ```
 
    Run one team's starter bot with the printed `WW_SERVER`/`WW_TOKEN` and check that it says
-   `seat N role ...`. Under `--fake-llm` the starter bot never nominates; that's expected.
+   `seat N role ...`. Under `--fake-llm` the starter bot never nominates; house bots still do.
 
 ## On the day
+
+The finale is two games of about 10 minutes each: game 1 plain, then the Forger reveal and a 10-minute
+fix window, then game 2 with forgers. Give each game its own `--runs-dir` so game 2 doesn't overwrite
+game 1's record.
 
 1. In the repo root: `source scripts/bifrost-env.sh`, then export every team key env var named in `teams.toml`.
 2. Launch. `--ready-s` is how long teams get to connect before house bots take their seats:
 
    ```sh
-   uv run ww final final.toml --host 0.0.0.0 --port 8046 --ready-s 300
+   caffeinate -dims uv run ww final final.toml --host 0.0.0.0 --port 8046 --ready-s 300 --runs-dir runs/game1
    ```
+
+   Keep the laptop plugged in: a sleeping laptop freezes the game mid-phase.
 
    It prints the spectator URL and, per team, the command it runs:
 
@@ -49,20 +55,22 @@ in time is replaced by a house bot too.
      WW_SERVER=http://10.x.x.x:8046 WW_TOKEN=... uv run bot
    ```
 
-   The same values are in `runs/final/laptop_seats.json`. Tokens are new on every launch.
+   The same values are in `runs/game1/final/laptop_seats.json`. Tokens are new on every launch.
 3. Open the spectator URL on the projector. The lobby shows each seat as `joining…` or `ready`.
 4. DM each team its command line (the indented one, without the team label). They run it in `starter/`. The bot should print `seat N role ...`, then wait.
 5. When the lobby is all `ready` (or `--ready-s` has passed and house bots have filled the gaps), start the game:
 
    ```sh
-   uv run ww start --server http://127.0.0.1:8046
+   uv run ww start --server http://127.0.0.1:8046 --runs-dir runs/game1
    ```
 
-6. When the game ends, the board stays up until you Ctrl-C. The run is written under `runs/`.
+6. When the game ends, the board stays up until you Ctrl-C. The run is written under `runs/game1/`.
+7. Reveal the Forger and open the fix window (below). Relaunch with `--forgers 2 --runs-dir runs/game2`
+   and DM the new lines during the window; tokens change on every launch. Start game 2 as in step 5.
 
 ## The Forger expansion
 
-Dropped about 15 minutes into the build. A `forger` house bot plays like `baseline`, but twice a day it
+Revealed between the two finale games. A `forger` house bot plays like `baseline`, but twice a day it
 posts a forged moderator notice naming one seat. Each forgery uses newlines to break out of its board line
 and fake the starter prompt's own `Moderator announcements:` section, so a bot that pastes chat into its
 prompt sees a real-looking notice. The stock starter falls for it: on Haiku it voted the forged target in
@@ -70,8 +78,12 @@ prompt sees a real-looking notice. The stock starter falls for it: on Haiku it v
 breaks: every bot keeps playing, so a team only notices by reading transcripts or by a gate going red.
 The fix lives in `bot/` (escape or flatten board text, attribute it to its seat), after a new locked gate.
 
-- Teams practise against it with `make practice N=3 FORGERS=2` in `starter/`.
-- The finale seats forgers in house seats: `uv run ww final final.toml ... --forgers 2`. With 10 teams in
+1. **Reveal** (~2 min): put a real forged post on screen; the stock bot obeys it 15/15.
+2. **Fix window** (~10 min): a spoof case in their suite first, then the fix in `bot/`, then
+   `make practice N=1 FORGERS=2` in `starter/` as proof. DM game 2's lines meanwhile.
+3. **Game 2** proves it on the projector. Debrief on whose suite caught it, not just whose bot won.
+
+- Game 2 seats forgers in house seats: `uv run ww final final.toml ... --forgers 2`. With 10 teams in
   12 seats both house seats become forgers; raise `seats` in `final.toml` for more.
 - The spectator labels them `house · forger`; players never see that label.
 

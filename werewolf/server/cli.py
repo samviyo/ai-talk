@@ -18,7 +18,7 @@ from .state import AppState, DEFAULT_PRICES as _FALLBACK_PRICES
 
 FORMATS = {
     "practice": dict(seats=7, wolves=2, max_days=5, discussion_s=60.0, max_posts=3),
-    "final": dict(seats=12, wolves=3, max_days=6, discussion_s=40.0, max_posts=3),
+    "final": dict(seats=12, wolves=3, max_days=6, discussion_s=40.0, max_posts=2),
 }
 
 
@@ -206,7 +206,7 @@ def cmd_final(args: argparse.Namespace) -> int:
             reveal_s=args.reveal_s, beat_s=args.beat_s,
             manual_start=not args.auto_start,
             host=args.host, ready_s=args.ready_s, fake_llm=args.fake_llm,
-            forgers=args.forgers,
+            forgers=args.forgers, runs_dir=Path(args.runs_dir),
         )
     )
 
@@ -304,6 +304,8 @@ def main() -> int:
     p_final.add_argument("--auto-start", action="store_true")
     # the expansion: this many house seats post forged moderator notices
     p_final.add_argument("--forgers", type=int, default=0)
+    # one dir per game, e.g. runs/game2, so a relaunch keeps the earlier game's record
+    p_final.add_argument("--runs-dir", default="runs")
     p_final.set_defaults(func=cmd_final)
 
     p_start = sub.add_parser("start")

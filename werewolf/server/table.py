@@ -820,6 +820,7 @@ class Table:
     # --- events / announcements ----------------------------------------------
 
     def announcements_locked(self, seat: int) -> list[dict[str, Any]]:
+        """Consumes the seat's unread announcements: call only when the result reaches the seat."""
         st = self.seats[seat]
         events = self.game.events(seat)
         out = [

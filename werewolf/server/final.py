@@ -127,13 +127,13 @@ async def run_final(
     min_window_s: float = 10.0, transition_s: float = 6.0,
     reveal_s: float = 1.5, beat_s: float = 2.5, manual_start: bool = True,
     host: str = "127.0.0.1", ready_s: float = READY_BUDGET_S, fake_llm: bool = False,
-    forgers: int = 0,
+    forgers: int = 0, runs_dir: Path = Path("runs"),
 ) -> int:
     fake_llm = fake_llm or check
     seats_n, seed, teams = load_final(toml_path)
     if not teams:
         raise SystemExit("final.toml has no [[teams]]")
-    bots_dir = Path("runs/final/bots")
+    bots_dir = runs_dir / "final" / "bots"
     bots_dir.mkdir(parents=True, exist_ok=True)
     checkouts: dict[str, Path] = {}
     for team in teams:
@@ -166,8 +166,8 @@ async def run_final(
     state = None
     config = Config(
         seats=seats_n, wolves=max(3, seats_n // 4),
-        # 40s plus the 20s floor drain airs ~10-15 posts and keeps six days near 13 minutes.
-        max_days=6, seed=seed, discussion_s=40.0, max_posts=3,
+        # Two posts each keeps nominations from queueing past the close; six days run ~10 minutes.
+        max_days=6, seed=seed, discussion_s=40.0, max_posts=2,
     )
     tokens = [secrets.token_urlsafe(12) for _ in range(seats_n)]
     rng = random.Random(seed)
@@ -190,7 +190,7 @@ async def run_final(
     powerup_prices = {k: float(v) for k, v in raw_prices.get("powerups", {}).items()}
     state = AppState(
         config=config, n_tables=1, budget_usd=budget_usd, window_s=WINDOW_S,
-        runs_dir=Path("runs"), prices=prices, fake_llm=fake_llm,
+        runs_dir=runs_dir, prices=prices, fake_llm=fake_llm,
         base_url=os.environ.get("BIFROST_BASE_URL"), teams_toml=teams_toml,
         auto_restart=False, floor_s=FLOOR_S,
         min_window_s=min_window_s, transition_s=transition_s,
@@ -220,7 +220,7 @@ async def run_final(
     public_url = f"http://{_lan_ip() if host == '0.0.0.0' else host}:{port}"
     from .cli import _write_tokens_file  # noqa: PLC0415
 
-    _write_tokens_file(state, Path("runs/final"))  # `ww start` reads the operator token here
+    _write_tokens_file(state, runs_dir / "final")  # `ww start` reads the operator token here
     print(f"[final] spectator: {url}/?op={state.operator_token}", flush=True)
     laptop_names = {t.name for t in teams if t.laptop}
     laptop_seats = {s for s, name in enumerate(assignment) if name in laptop_names}
@@ -229,7 +229,7 @@ async def run_final(
             assignment[s]: {"WW_SERVER": public_url, "WW_TOKEN": tokens[s], "seat": s}
             for s in sorted(laptop_seats)
         }
-        handout_path = Path("runs/final/laptop_seats.json")
+        handout_path = runs_dir / "final" / "laptop_seats.json"
         handout_path.write_text(json.dumps(handout, indent=1))
         print(f"[final] laptop seats ({handout_path}); send each team its command:", flush=True)
         for name, h in handout.items():
