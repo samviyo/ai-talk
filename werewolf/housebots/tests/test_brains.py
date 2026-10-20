@@ -163,6 +163,18 @@ def test_accuser_never_accuses_partner() -> None:
     assert post["args"]["accuse"] == 0
 
 
+def test_baseline_villager_nominates_on_a_hunch_but_wolves_do_not() -> None:
+    # Votes only happen after a nomination, so a quiet board must still produce one sometimes.
+    villager = [make_brain("baseline", seed=s).decide({**make_view(seat=0, you_owe="post"), "intent": "talk"})
+                for s in range(20)]
+    nominated = [p for p in villager if p and "nominate" in p["args"]]
+    assert nominated and all(p["args"]["nominate"] != 0 for p in nominated)
+    wolf = [make_brain("baseline", seed=s).decide({**make_view(seat=1, role="werewolf", partners=[4],
+                                                                you_owe="post"), "intent": "talk"})
+            for s in range(20)]
+    assert not any(p and "nominate" in p["args"] and "seer" not in p["args"]["chat"] for p in wolf)
+
+
 # -- baseline claims tracking ------------------------------------------------
 
 def test_baseline_wolf_counterclaim_never_names_partner() -> None:

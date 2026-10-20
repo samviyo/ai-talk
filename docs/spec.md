@@ -37,7 +37,7 @@ rejects `seats < 2 * wolves + 3`. Roles are assigned by a shuffle from `seed`.
 | Format | Seats | Wolves | Discussion | Max days |
 |---|---|---|---|---|
 | practice | 7 | 2 | 60s live chat, 3 posts each | 5 |
-| final | 10–12 | 3 | 90s live chat, 3 posts each | 6 |
+| final | 10–12 | 3 | 40s live chat, 3 posts each | 6 |
 
 ## Engine contract (`werewolf/engine`)
 
@@ -85,7 +85,7 @@ submitted ballots; a tie is broken by the seeded RNG; zero ballots means no kill
 doctor may save itself, but not the same seat two nights running. A saved target lives.
 
 **Discussion (live chat).** One discussion window per day, `discussion_s` long from its
-release (practice 60s, final 90s), never closing early. Every living, funded seat may post
+release (practice 60s, final 40s), never closing early. Every living, funded seat may post
 up to `max_posts` times (default 3; `extra_post` adds one). Accepted posts join the floor
 queue; they become public only when the floor releases them (see "The floor"). `reply_to`
 must name a public post of the current game. A seat must wait 5s between its own released

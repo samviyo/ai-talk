@@ -38,6 +38,12 @@ ACCUSE_LINES = [
     "Something about seat {target} doesn't add up.",
 ]
 
+HUNCH_LINES = [
+    "Nobody's said it, so I will: I'm nominating seat {target}.",
+    "Seat {target} has been too comfortable. Nominating them.",
+    "Let's put seat {target} on the spot. Nominated.",
+]
+
 PILE_LINES = [
     "Seat {target} has the most suspicion.",
     "The case against seat {target} is strongest.",
@@ -195,6 +201,7 @@ class BaselineBrain(BaseBrain):
     """Claims tracking: believes the seer claim, votes its revealed wolves."""
 
     COUNTERCLAIM_CHANCE = 0.15
+    HUNCH_CHANCE = 0.5
     SHIELD_CHANCE = 0.5
     FRAME_CHANCE = 0.4
 
@@ -392,7 +399,21 @@ class BaselineBrain(BaseBrain):
                     self._nominated_today = day
                 return {"tool": "post", "args": args,
                         "reason": f"joining the pile on seat {target}"}
+            cleared = self._cleared_villagers(view)
+            return self._hunch(view, [s for s in candidates if s != me and s not in cleared])
         return None
+
+    def _hunch(self, view: View, pool: list[int]) -> Action | None:
+        # No nomination means no vote; villager-only hunches keep the table balanced (wolf hunches tip it).
+        day = (view.get("turn") or {}).get("day", 0)
+        if not pool or self._nominated_today == day or self.rng.random() >= self.HUNCH_CHANCE:
+            return None
+        target = self.rng.choice(sorted(pool))
+        self._nominated_today = day
+        return {"tool": "post",
+                "args": {"chat": self.rng.choice(HUNCH_LINES).format(target=target),
+                         "accuse": target, "nominate": target},
+                "reason": f"nominating seat {target} on a hunch"}
 
     def maybe_buy(self, view: View) -> Action | None:
         day = (view.get("turn") or {}).get("day", 0)

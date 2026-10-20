@@ -26,6 +26,7 @@ from .state import AppState
 
 READY_BUDGET_S = 90.0
 WINDOW_S = 30.0
+FLOOR_S = 2.5  # 12 seats in a 40s discussion need posts airing faster than the 4s default
 ENV_ALLOWLIST = ("WW_SERVER", "WW_TOKEN", "PATH", "HOME")
 INSTALL_ENV_ALLOWLIST = ("PATH", "HOME", "UV_CACHE_DIR", "UV_PYTHON", "UV_INDEX_URL")
 
@@ -165,7 +166,8 @@ async def run_final(
     state = None
     config = Config(
         seats=seats_n, wolves=max(3, seats_n // 4),
-        max_days=6, seed=seed, discussion_s=90.0, max_posts=3,
+        # 40s plus the 20s floor drain airs ~10-15 posts and keeps six days near 13 minutes.
+        max_days=6, seed=seed, discussion_s=40.0, max_posts=3,
     )
     tokens = [secrets.token_urlsafe(12) for _ in range(seats_n)]
     rng = random.Random(seed)
@@ -190,7 +192,7 @@ async def run_final(
         config=config, n_tables=1, budget_usd=budget_usd, window_s=WINDOW_S,
         runs_dir=Path("runs"), prices=prices, fake_llm=fake_llm,
         base_url=os.environ.get("BIFROST_BASE_URL"), teams_toml=teams_toml,
-        auto_restart=False,
+        auto_restart=False, floor_s=FLOOR_S,
         min_window_s=min_window_s, transition_s=transition_s,
         house_prices=house_prices or None, powerup_prices=powerup_prices or None,
         reveal_s=reveal_s, beat_s=beat_s, manual_start=manual_start,

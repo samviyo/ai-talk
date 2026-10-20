@@ -18,7 +18,7 @@ from .state import AppState, DEFAULT_PRICES as _FALLBACK_PRICES
 
 FORMATS = {
     "practice": dict(seats=7, wolves=2, max_days=5, discussion_s=60.0, max_posts=3),
-    "final": dict(seats=12, wolves=3, max_days=6, discussion_s=90.0, max_posts=3),
+    "final": dict(seats=12, wolves=3, max_days=6, discussion_s=40.0, max_posts=3),
 }
 
 
