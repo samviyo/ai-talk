@@ -1,3 +1,9 @@
+# The Bifrost key make setup saved; an exported BIFROST_API_KEY still wins.
+ifndef BIFROST_API_KEY
+-include ../.bifrost.env
+export BIFROST_API_KEY BIFROST_BASE_URL
+endif
+
 .PHONY: bot check eval practice lock unlock test
 
 bot:

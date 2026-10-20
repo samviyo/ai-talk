@@ -2,6 +2,7 @@
 __pycache__/
 runs/
 .env
+.bifrost.env
 *.pyc
 .claude/worktrees/
 .serena/

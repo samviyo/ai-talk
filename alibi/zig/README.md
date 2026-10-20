@@ -11,9 +11,12 @@ the end (`ALIBI_HELDOUT_SEED=<seed> make reveal-parity`). You have 20 minutes.
 ## Setup (once)
 
 ```sh
-make setup      # uv sync, pinned Zig 0.16.0 into .tools/, build the stubs
+make setup      # uv sync, pinned Zig 0.16.0 into .tools/, build the stubs, save your Bifrost key
 make golden     # run the Python tool on today's inputs, freeze the answers, lock them
 ```
+
+No internet? `ZIG_DIST=<folder> make setup` installs Zig from a folder made by `make zig-bundle`,
+still checked against the pinned SHA-256.
 
 `make golden` runs once; after that it refuses to run again. `alibi/golden/` is then locked:
 agents cannot edit it, the Python tool, or the scorers in `alibi/zig/scorers/`.

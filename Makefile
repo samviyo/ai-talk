@@ -1,3 +1,9 @@
+# The Bifrost key make setup saved; an exported BIFROST_API_KEY still wins.
+ifndef BIFROST_API_KEY
+-include .bifrost.env
+export BIFROST_API_KEY BIFROST_BASE_URL
+endif
+
 BOT ?= connect4.bots.naive:choose
 GAMES ?= 200
 PUZZLES ?= 40
@@ -65,19 +71,24 @@ ZIG_BIN_FLAG = $(if $(ALIBI_ZIG_BIN),--bin $(ALIBI_ZIG_BIN),)
 # The port runs fixed scorers we ship, so teams only write Zig.
 ZIG_SCORERS = ALIBI_TEAM_EVALS_DIR=alibi/zig/scorers
 
-.PHONY: setup zig zig-build golden parity parity-parse parity-score parity-report reveal-parity unlock-golden fake-port
+.PHONY: setup zig zig-bundle zig-build golden parity parity-parse parity-score parity-report reveal-parity unlock-golden fake-port
 
-# One command for a fresh laptop: Python deps, the pinned Zig, and a build of the stubs.
+# One command for a fresh laptop: Python deps, the pinned Zig, a stub build, and the Bifrost key.
 setup:
 	@command -v uv >/dev/null || { echo "uv not found: install it from https://docs.astral.sh/uv/"; exit 1; }
 	uv sync
 	cd starter && uv sync
 	uv run python -m alibi.migrate zig
 	uv run python -m alibi.migrate build
+	scripts/bifrost-setup.sh
 	@echo "setup done: next is make golden at the hand-off"
 
 zig:
 	uv run python -m alibi.migrate zig
+
+# Organiser: all four platform tarballs into .tools/dist; hand that folder out, then ZIG_DIST=<folder> make setup.
+zig-bundle:
+	uv run python -m alibi.migrate zig-bundle
 
 zig-build:
 	uv run python -m alibi.migrate build

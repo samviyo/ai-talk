@@ -38,6 +38,7 @@ def _get_client() -> OpenAI:
         _client = OpenAI(
             base_url=os.environ["BIFROST_BASE_URL"].rstrip("/") + "/v1",  # gateway-env exports the bare origin
             api_key=os.environ["BIFROST_API_KEY"],
+            default_headers={"x-bf-vk": os.environ["BIFROST_API_KEY"]},  # Bifrost dev ignores Bearer and only checks this header
         )
     return _client
 

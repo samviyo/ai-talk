@@ -1,8 +1,9 @@
-"""Pinned Zig toolchain: `make zig` downloads it once into `.tools/`, checksum-verified."""
+"""Pinned Zig toolchain: `make zig` installs it once into `.tools/`, checksum-verified, offline when a local copy exists."""
 
 from __future__ import annotations
 
 import hashlib
+import os
 import platform
 import shutil
 import sys
@@ -35,23 +36,59 @@ def host_target() -> str:
     return f"{arch}-{os_name}"
 
 
+def tarball_name(target: str) -> str:
+    return f"zig-{target}-{ZIG_VERSION}.tar.xz"
+
+
+def dist_dirs() -> list[Path]:
+    """Where an offline copy may sit: $ZIG_DIST, then .tools/dist (filled by make zig-bundle)."""
+    env = os.environ.get("ZIG_DIST")
+    return ([Path(env).expanduser()] if env else []) + [TOOLS_DIR / "dist"]
+
+
+def _verified(tarball: Path, target: str) -> bool:
+    return hashlib.sha256(tarball.read_bytes()).hexdigest() == SHASUMS[target]
+
+
+def _download(target: str, dest: Path) -> None:
+    url = f"https://ziglang.org/download/{ZIG_VERSION}/{tarball_name(target)}"
+    print(f"downloading {url}", file=sys.stderr)
+    with urllib.request.urlopen(url) as resp, dest.open("wb") as fh:
+        shutil.copyfileobj(resp, fh)
+    if not _verified(dest, target):
+        dest.unlink()
+        raise SystemExit(f"checksum mismatch for {url}")
+
+
 def install() -> Path:
-    """Install the pinned Zig if missing; returns the binary path."""
+    """Install the pinned Zig if missing, from a local copy when there is one; returns the binary path."""
     if ZIG.exists():
         return ZIG
     target = host_target()
-    name = f"zig-{target}-{ZIG_VERSION}"
-    url = f"https://ziglang.org/download/{ZIG_VERSION}/{name}.tar.xz"
-    print(f"downloading {url}", file=sys.stderr)
+    name = tarball_name(target)
     with tempfile.TemporaryDirectory() as tmp:
-        tarball = Path(tmp) / f"{name}.tar.xz"
-        with urllib.request.urlopen(url) as resp, tarball.open("wb") as fh:
-            shutil.copyfileobj(resp, fh)
-        digest = hashlib.sha256(tarball.read_bytes()).hexdigest()
-        if digest != SHASUMS[target]:
-            raise SystemExit(f"checksum mismatch for {url}: got {digest}")
+        local = next((d / name for d in dist_dirs() if (d / name).is_file()), None)
+        if local and _verified(local, target):
+            print(f"installing from {local} (offline)", file=sys.stderr)
+            tarball = local
+        else:
+            if local:
+                print(f"ignoring {local}: checksum mismatch", file=sys.stderr)
+            tarball = Path(tmp) / name
+            _download(target, tarball)
         with tarfile.open(tarball) as tf:
             tf.extractall(tmp, filter="data")
         TOOLS_DIR.mkdir(exist_ok=True)
-        shutil.move(str(Path(tmp) / name), ZIG_DIR)
+        shutil.move(str(Path(tmp) / name.removesuffix(".tar.xz")), ZIG_DIR)
     return ZIG
+
+
+def bundle() -> Path:
+    """Fetch every pinned platform's tarball into .tools/dist, to hand out for offline installs."""
+    dist = TOOLS_DIR / "dist"
+    dist.mkdir(parents=True, exist_ok=True)
+    for target in SHASUMS:
+        dest = dist / tarball_name(target)
+        if not (dest.is_file() and _verified(dest, target)):
+            _download(target, dest)
+    return dist

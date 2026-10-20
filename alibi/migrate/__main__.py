@@ -204,6 +204,7 @@ def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="alibi.migrate")
     sub = ap.add_subparsers(dest="cmd", required=True)
     sub.add_parser("zig")
+    sub.add_parser("zig-bundle")
     sub.add_parser("build")
     g = sub.add_parser("golden")
     g.add_argument("--team-evals-dir", default=None)
@@ -220,6 +221,9 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.cmd == "zig":
         print(zig.install())
+        return 0
+    if args.cmd == "zig-bundle":
+        print(zig.bundle())
         return 0
     if args.cmd == "build":
         return build()

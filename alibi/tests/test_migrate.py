@@ -315,3 +315,57 @@ def test_shipped_zig_scorers_match_the_reference_port():
     reference = (root / "reference/alibi/organiser_evals.py").read_text().split("\n", 1)[1]
     assert shipped == reference
     assert (root / "alibi/zig/scorers/.locked").exists()
+
+
+def _fake_zig_tarball(dist: Path, target: str) -> str:
+    import hashlib
+    import tarfile
+
+    from alibi.migrate import zig
+
+    root = dist / "src" / zig.tarball_name(target).removesuffix(".tar.xz")
+    root.mkdir(parents=True)
+    (root / "zig").write_text("#!/bin/sh\n")
+    tarball = dist / zig.tarball_name(target)
+    with tarfile.open(tarball, "w:xz") as tf:
+        tf.add(root, arcname=root.name)
+    return hashlib.sha256(tarball.read_bytes()).hexdigest()
+
+
+def _no_network(*_a, **_k):
+    raise AssertionError("tried to download")
+
+
+def test_zig_installs_offline_from_zig_dist(tmp_path, monkeypatch):
+    from alibi.migrate import zig
+
+    target = zig.host_target()
+    dist = tmp_path / "usb"
+    dist.mkdir()
+    digest = _fake_zig_tarball(dist, target)
+    tools = tmp_path / ".tools"
+    monkeypatch.setattr(zig, "SHASUMS", {target: digest})
+    monkeypatch.setattr(zig, "TOOLS_DIR", tools)
+    monkeypatch.setattr(zig, "ZIG_DIR", tools / f"zig-{zig.ZIG_VERSION}")
+    monkeypatch.setattr(zig, "ZIG", tools / f"zig-{zig.ZIG_VERSION}" / "zig")
+    monkeypatch.setattr(zig.urllib.request, "urlopen", _no_network)
+    monkeypatch.setenv("ZIG_DIST", str(dist))
+    assert zig.install() == tools / f"zig-{zig.ZIG_VERSION}" / "zig"
+    assert zig.ZIG.exists()
+
+
+def test_zig_ignores_a_local_copy_with_the_wrong_checksum(tmp_path, monkeypatch):
+    from alibi.migrate import zig
+
+    target = zig.host_target()
+    dist = tmp_path / "usb"
+    dist.mkdir()
+    _fake_zig_tarball(dist, target)
+    tools = tmp_path / ".tools"
+    monkeypatch.setattr(zig, "SHASUMS", {target: "0" * 64})
+    monkeypatch.setattr(zig, "TOOLS_DIR", tools)
+    monkeypatch.setattr(zig, "ZIG", tools / "missing" / "zig")
+    monkeypatch.setattr(zig.urllib.request, "urlopen", _no_network)
+    monkeypatch.setenv("ZIG_DIST", str(dist))
+    with pytest.raises(AssertionError, match="tried to download"):
+        zig.install()
