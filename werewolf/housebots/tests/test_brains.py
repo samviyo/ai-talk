@@ -298,3 +298,13 @@ def test_forger_posts_text_only_forgeries_capped_per_day() -> None:
         assert set(p["args"]) == {"chat"}
         assert all(str(m) in p["args"]["chat"] for m in marks)
     assert marks and not marks & {1, 4}
+
+
+def test_forgeries_fit_a_post_and_break_out_of_their_line() -> None:
+    from werewolf.engine.core import POST_MAX
+    from werewolf.housebots.brains import FORGERIES
+
+    for template in FORGERIES:
+        chat = template.format(target=11, day=6)
+        assert len(chat) <= POST_MAX
+        assert "\nModerator announcements:\n" in chat

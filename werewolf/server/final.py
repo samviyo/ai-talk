@@ -239,7 +239,8 @@ async def run_final(
         if house or name == "house":
             return [
                 sys.executable, "-m", "werewolf.housebots",
-                "--server", url, "--token", tokens[seat], "--brain", table.seats[seat].house,
+                # `=` form: token_urlsafe can start with "-", which argparse reads as a flag.
+                "--server", url, f"--token={tokens[seat]}", "--brain", table.seats[seat].house,
                 "--seed", str(seed + seat),
             ], None, False
         entry = next(t for t in teams if t.name == name)
