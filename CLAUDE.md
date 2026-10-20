@@ -13,7 +13,8 @@ evals they write themselves. Everything runs on laptops; there is no hosted infr
 | `werewolf/housebots/` | Rule-based house bots: `random`, `quiet`, `accuser`, `baseline`, plus the `forger` expansion (no LLM calls) |
 | `connect4/` | Part 1 exercise: engine, solver, puzzles, naive bot, eval harness |
 | `alibi/` | "The Agent's Alibi" transcript-audit exercise: fixtures, bots, harness, scorer checks |
-| `reference/alibi/` | Organiser-only reference scorers and check notes; teams never see these |
+| `alibi/migrate/`, `alibi/zig/` | Part 1 migration: port check-alibi to Zig; golden outputs, parity checks, team stubs |
+| `reference/alibi/` | Organiser-only reference scorers, check notes, and a reference Zig port plus fake port |
 | `starter/` | The kit teams receive; has its own `CLAUDE.md`, `pyproject.toml` and `uv.lock` |
 | `dogfood/` | `team_a/`, `team_b/`: starter-kit copies played through as rehearsal teams |
 | `prices.toml` | Model prices, house-bot and power-up prices, penalties; the server only accepts models listed here |
@@ -25,6 +26,9 @@ uv run pytest -q                       # werewolf, connect4, alibi, reference
 make test-c4 | make eval-c4            # Connect Four
 make test-alibi | make check-alibi | make eval-alibi
 ALIBI_HELDOUT_SEED=<seed> make reveal-alibi ALIBI_BOT=<bot>
+make zig | make golden | make parity | make parity-{parse,score,report}
+ALIBI_HELDOUT_SEED=<seed> make reveal-parity [ALIBI_ZIG_BIN=<binary>]
+make fake-port                          # organiser: lookup-table port that fails reveal-parity
 ```
 
 A local game with zero model spend:
@@ -43,8 +47,9 @@ Port 8000 is often taken on this laptop; pick another.
 ## Rules
 
 - **Locked evals.** `.claude/hooks/` blocks agent edits to `connect4/team_evals/` and to `alibi/team_evals/`,
-  `alibi/datasets/`, `reference/alibi/` while their `.locked` file exists. Never route around a hook, and never run
-  `make unlock-*`; a human unlocks.
+  `alibi/datasets/`, `reference/alibi/`, `alibi/golden/`, `alibi/migrate/`, `alibi/checks.py` and `alibi/scorers.py`
+  while their `.locked` file exists. Never route around a hook, and never run `make unlock-*`; a human unlocks.
+- **Zig is pinned** at 0.16.0 (`make zig`, into ignored `.tools/`); 0.15.x cannot link on macOS 26.
 - **Teams write their own evals.** The starter ships a harness, not a suite. Don't add scorers, gates or datasets
   to `starter/evals/` or the `team_evals/` dirs; example scorers go in scratch space, not the repo.
 - **Keys.** In a game, a bot never holds a Bifrost key; it calls the server's `/llm/v1/chat/completions` proxy with a seat token.

@@ -8,3 +8,8 @@ runs/
 .playwright-mcp/
 alibi/datasets/heldout.jsonl
 teams.toml
+.tools/
+alibi/zig/zig-out/
+alibi/zig/.zig-cache/
+reference/alibi/zig_port/zig-out/
+reference/alibi/zig_port/.zig-cache/

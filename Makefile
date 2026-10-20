@@ -58,3 +58,41 @@ unlock-alibi:
 	chmod u+w $(ALIBI_SCORER_FILES) alibi/team_evals/gates.toml $(ALIBI_DATASET_FILES)
 	chmod u+w alibi/team_evals alibi/datasets
 	rm -f alibi/team_evals/.locked
+
+# Part 1 migration: port check-alibi to Zig; frozen golden outputs are the only reviewer.
+ALIBI_ZIG_BIN ?=
+ZIG_BIN_FLAG = $(if $(ALIBI_ZIG_BIN),--bin $(ALIBI_ZIG_BIN),)
+
+.PHONY: zig zig-build golden parity parity-parse parity-score parity-report reveal-parity unlock-golden fake-port
+
+zig:
+	uv run python -m alibi.migrate zig
+
+zig-build:
+	uv run python -m alibi.migrate build
+
+golden:
+	uv run python -m alibi.migrate golden
+
+parity:
+	uv run python -m alibi.migrate parity $(ZIG_BIN_FLAG)
+
+parity-parse:
+	uv run python -m alibi.migrate parity --stage parse $(ZIG_BIN_FLAG)
+
+parity-score:
+	uv run python -m alibi.migrate parity --stage score $(ZIG_BIN_FLAG)
+
+parity-report:
+	uv run python -m alibi.migrate parity --stage report $(ZIG_BIN_FLAG)
+
+reveal-parity:
+	uv run python -m alibi.migrate reveal $(ZIG_BIN_FLAG)
+
+unlock-golden:
+	chmod -R u+w alibi/golden
+	rm -f alibi/golden/.locked
+
+# Organiser-only: a lookup-table "port" that passes parity and fails reveal-parity.
+fake-port:
+	uv run python reference/alibi/zig_port/fake_port.py
