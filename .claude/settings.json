@@ -2,8 +2,7 @@
   "permissions": {
     "deny": [
       "Bash(make golden*)",
-      "Bash(make unlock-alibi*)",
-      "Bash(git push *)"
+      "Bash(make unlock-alibi*)"
     ],
     "allow": [
       "Bash(make parity*)"
