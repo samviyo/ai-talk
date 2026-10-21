@@ -167,20 +167,15 @@ async def run_final(
 
     teams_toml_path = Path("teams.toml")
     team_names = [t.name for t in teams]
-    if fake_llm:
-        teams_toml = load_teams_keys(teams_toml_path) if teams_toml_path.exists() else {}
-    elif not teams_toml_path.exists():
-        raise SystemExit("teams.toml not found (finale needs per-team Bifrost keys)")
-    else:
-        teams_toml = load_teams_keys(teams_toml_path)
+    # Without teams.toml every team shares BIFROST_API_KEY; budgets are per seat either way.
+    teams_toml = load_teams_keys(teams_toml_path) if teams_toml_path.exists() else {}
     missing = [] if fake_llm else [
-        (name, teams_toml.get(name))
-        for name in team_names
-        if not (teams_toml.get(name) and os.environ.get(teams_toml[name]))
+        name for name in team_names
+        if not os.environ.get(teams_toml.get(name) or "BIFROST_API_KEY")
     ]
     if missing:
-        names = ", ".join(n for n, _ in missing)
-        raise SystemExit(f"teams.toml has no usable key env var for: {names}")
+        raise SystemExit(f"no Bifrost key for: {', '.join(missing)} "
+                         "(set BIFROST_API_KEY, or the team's var in teams.toml)")
 
     state = None
     config, floor_s = final_config(seats_n, seed)

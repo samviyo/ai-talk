@@ -6,9 +6,9 @@ team not connected in time is replaced by a house bot too.
 
 ## Before the day
 
-1. **`teams.toml`** (repo root, untracked): one `[teams.<name>]` per team with its `bifrost_key_env`,
-   and each of those env vars set in the shell that runs the finale. See `teams.example.toml`.
-2. **`final.toml`** (anywhere; scratch is fine): one entry per team, names matching `teams.toml`.
+1. **Keys.** By default every team shares `BIFROST_API_KEY`, and budgets are still per seat. You need
+   `teams.toml` (repo root, untracked; see `teams.example.toml`) only to bill a team to its own key.
+2. **`final.toml`** (anywhere; scratch is fine): one entry per team.
 
    ```toml
    seats = 16                          # teams + 2, so game 2 has house seats to forge from
@@ -41,7 +41,7 @@ game 1's record.
 
 1. Plug the laptop in, keep the lid open, and run the finale under `caffeinate -dims` (`caffeinate -dims uv run ww final ...`).
    A sleeping server stalls the game clock for everyone; a dry run lost 8 minutes to a closed lid.
-2. In the repo root: `source scripts/bifrost-env.sh`, then export every team key env var named in `teams.toml`.
+2. In the repo root: `source scripts/bifrost-env.sh` (plus any per-team key vars, if you use `teams.toml`).
 3. Launch. `--ready-s` is how long teams get to connect before house bots take their seats:
 
    ```sh
@@ -100,6 +100,6 @@ The fix lives in `bot/` (escape or flatten board text, attribute it to its seat)
 |---|---|
 | Team's bot prints `get_my_role failed: {'error': 'unauthorized'...}` | It joined after the start (or `--ready-s`); a house bot has the seat. It joins game 2 with the new line. |
 | Team's bot can't connect, or repeats `lost the server (ConnectError)` | Wrong IP or blocked network; see the network check above. |
-| `teams.toml has no usable key env var for: X` | Export X's key env var, or fix the name in `final.toml`. |
+| `no Bifrost key for: X` | `BIFROST_API_KEY` isn't set in the finale shell (or X's own var, if `teams.toml` lists X). |
 | A team's bot prints `lost the server (ReadTimeout); reconnecting` | A Wi-Fi blip or a sleeping laptop; it rejoins by itself and misses only the windows that closed meanwhile. |
 | A team's bot crashes mid-game | They can rerun the same command; until then their seat misses deadlines. |

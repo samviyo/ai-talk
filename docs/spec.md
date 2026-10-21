@@ -460,8 +460,9 @@ cmd = "uv run bot"                     # run inside the checkout
   inherited, so no Bifrost key can leak to team code. `uv sync` during install also
   runs with a sanitized env (`PATH`, `HOME`, `UV_CACHE_DIR`, `UV_PYTHON`,
   `UV_INDEX_URL` only).
-- Per-team Bifrost keys come from `teams.toml` (same file as `ww serve`); the finale
-  refuses to start if any assigned team's key env var is unset (`--fake-llm` skips this).
+- Bifrost keys work as in `ww serve`: a team listed in the optional `teams.toml` uses its own key
+  env var, and every other team uses `BIFROST_API_KEY`. The finale refuses to start if any
+  assigned team's key is unset (`--fake-llm` skips this).
 - Bots run in their own process groups; shutdown and replacement kill the group.
 - **Readiness barrier:** the first window stays closed until every seat has called
   `get_my_role`, or after `--ready-s` (default 90s). A seat that is not ready by then is
