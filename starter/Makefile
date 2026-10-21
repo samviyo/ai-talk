@@ -14,9 +14,9 @@ bot:
 check:
 	uv run python -m evals.offline
 
-# N games vs house bots into runs/practice: make practice N=5 [KEEP=1] [FORGERS=2]
+# N games vs house bots into runs/practice: make practice N=5 [KEEP=1] [FORGERS=2] [SEED=n]
 practice:
-	uv run python -m evals.practice --games $(or $(N),5) $(if $(KEEP),--keep,) $(if $(FORGERS),--forgers $(FORGERS),)
+	uv run python -m evals.practice --games $(or $(N),5) $(if $(KEEP),--keep,) $(if $(FORGERS),--forgers $(FORGERS),) $(if $(SEED),--seed $(SEED),)
 
 # Game evals: your scorers (evals/scorers/*.py) over runs/practice tasks.
 # make eval [RUNS=runs] [SEAT=6] [TEAM=name] [LATEST=N]

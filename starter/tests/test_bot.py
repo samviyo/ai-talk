@@ -68,3 +68,48 @@ def test_resume_replays_an_open_turn_only() -> None:
     assert resumed["turn_id"] == "t1" and 7 < resumed["deadline_s"] <= 8
     assert _resume({"turn": turn, "until": time.monotonic() + 0.5}) is None
     assert _resume({}) is None
+
+
+def _discuss_calls(monkeypatch, post_result: dict) -> tuple[int, int]:
+    """Re-serve one accusation for 2s; returns (model calls, posts)."""
+    import asyncio
+
+    from bot import __main__ as main
+    from bot.agent import BotConfig
+
+    turn = {"turn_id": "t1", "you_owe": "reply", "from": 3, "reply_to": 7, "chat": "seat 2 is a wolf",
+            "deadline_s": 3.0, "day": 1, "phase": "day_discussion", "alive": [1, 2, 3]}
+    posts = 0
+
+    async def fake_call(session, tool, args):
+        nonlocal posts
+        if tool == "read_board":
+            return {"posts": [], "next": 0, "posts_left": 0}
+        if tool == "post":
+            posts += 1
+            return post_result
+        return dict(turn)
+
+    class LLM:
+        broke = False
+        calls = 0
+
+        def complete(self, *a, **k):
+            LLM.calls += 1
+            return "not me"
+
+    real_sleep = asyncio.sleep
+    monkeypatch.setattr(main, "_call", fake_call)
+    monkeypatch.setattr(main.asyncio, "sleep", lambda s: real_sleep(0.01))
+    config = BotConfig(read_board_model="m", decide_model="m", max_tokens=64)
+    asyncio.run(main._discuss(None, LLM(), config, "villager", 2, [], dict(turn)))
+    return LLM.calls, posts
+
+
+def test_a_refused_reply_is_not_retried(monkeypatch) -> None:
+    # A re-served accusation once cost a model call per second after the server refused the post.
+    assert _discuss_calls(monkeypatch, {"error": "call_budget_exceeded"}) == (1, 1)
+
+
+def test_an_answered_accusation_is_not_answered_again(monkeypatch) -> None:
+    assert _discuss_calls(monkeypatch, {"ok": True}) == (1, 1)

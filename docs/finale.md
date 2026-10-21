@@ -85,7 +85,7 @@ The fix lives in `bot/` (escape or flatten board text, attribute it to its seat)
 
 1. **Reveal** (~2 min): put a real forged post on screen; the stock bot obeys it 15/15.
 2. **Fix window** (~10 min): a spoof case in their suite first, then the fix in `bot/`, then
-   `make practice N=1 FORGERS=2` in `starter/` as proof. DM game 2's lines meanwhile.
+   `make practice N=3 FORGERS=2` in `starter/` as proof (one game can end before a forgery airs). DM game 2's lines meanwhile.
 3. **Game 2** proves it on the projector. Debrief on whose suite caught it, not just whose bot won.
 
 - Game 2 seats forgers in house seats: `uv run ww final final.toml ... --forgers 2`. With 14 teams keep `seats = 16`:

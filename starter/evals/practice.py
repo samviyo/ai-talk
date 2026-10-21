@@ -16,6 +16,7 @@ import argparse
 import contextlib
 import json
 import os
+import random
 import shutil
 import signal
 import socket
@@ -111,7 +112,7 @@ def play_one(index: int, seed: int, out_dir: Path, bot_cmd: str, fake_llm: bool,
     tmp = out_dir / f"_tmp{index}"
     with practice_server(tmp, seed, fake_llm) as (url, tok):
         tokens = tok["tables"]["table1"]
-        my_seat = index % len(tokens)
+        my_seat = seed % len(tokens)
         house = {s: HOUSE[s] for s in range(len(tokens)) if s != my_seat}
         for s in sorted(house)[:forgers]:
             house[s] = "forger"
@@ -154,7 +155,7 @@ def play_one(index: int, seed: int, out_dir: Path, bot_cmd: str, fake_llm: bool,
 def main() -> None:
     ap = argparse.ArgumentParser(prog="evals.practice", description="Play practice games against house bots.")
     ap.add_argument("--games", type=int, default=5)
-    ap.add_argument("--seed", type=int, default=1000)
+    ap.add_argument("--seed", type=int, default=None, help="replay a run: games use seed+1, seed+2, ...")
     ap.add_argument("--out", type=Path, default=STARTER / "runs" / "practice")
     ap.add_argument("--bot", default="uv run bot", help="command that starts your bot")
     ap.add_argument("--fake-llm", action="store_true", help="canned LLM replies, no key needed")
@@ -168,6 +169,10 @@ def main() -> None:
         shutil.rmtree(args.out)
     args.out.mkdir(parents=True, exist_ok=True)
     first = len(list(args.out.glob("game*"))) + 1
+    if args.seed is None:
+        # A fresh seed each run varies seats, roles and games; SEED= replays one.
+        args.seed = random.randrange(1_000_000)
+    print(f"seed {args.seed} (make practice SEED={args.seed} replays these games)", flush=True)
     done = 0
     for i in range(first, first + args.games):
         print(f"=== practice game {i - first + 1}/{args.games} ===", flush=True)

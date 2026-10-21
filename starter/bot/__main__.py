@@ -56,6 +56,11 @@ def _queued(out: dict | str) -> bool:
     return isinstance(out, dict) and out.get("error") == "still_queued"
 
 
+def _code(out: dict | str) -> str | None:
+    """The server's error code, whether it came back as text or as {"error": ...}."""
+    return out.get("error") if isinstance(out, dict) else out
+
+
 async def _maybe_buy_vote(session: ClientSession, turn: dict) -> None:
     """Example purchase rule: buy a double vote once if we can afford it."""
     shop = await _call(session, "shop", {})
@@ -79,6 +84,9 @@ async def _discuss(session: ClientSession, llm, config: BotConfig,
     news_cursor: int | None = None  # event cursor for wait_for_turn(since=...)
     alive = list(turn.get("alive") or [])
     queued_until = 0.0  # a still_queued post holds the floor; resending burns the call budget
+    stopped = False  # the server refused a post for the rest of this window
+    replies: dict[object, str] = {}  # reply_to -> our text, so a re-served reply costs no model call
+    answered: set[object] = set()
     say(f"day {turn.get('day')} discussion: {deadline_s:.0f}s on the clock")
     while True:
         left = deadline_s - (asyncio.get_event_loop().time() - started)
@@ -95,9 +103,20 @@ async def _discuss(session: ClientSession, llm, config: BotConfig,
         mentions = turn.get("mentions") or []
         want = None
         owe = turn.get("you_owe")
-        if asyncio.get_event_loop().time() < queued_until:
+        if asyncio.get_event_loop().time() < queued_until or stopped:
             owe = "wait"  # our last post is still queued for the floor
-        if owe == "reply":
+        key = turn.get("reply_to", turn.get("from"))
+        if owe == "reply" and key in answered:
+            owe = "wait"
+        if owe == "reply" and key in replies:
+            out = await _call(session, "post", {"turn_id": turn_id, "chat": replies[key],
+                                                **({"reply_to": key} if "reply_to" in turn else {})})
+            stopped = _code(out) in _STOP_CODES
+            if _queued(out):
+                queued_until = asyncio.get_event_loop().time() + QUEUED_BACKOFF_S
+            else:
+                answered.add(key)
+        elif owe == "reply":
             say(f"  seat {turn.get('from')} accused us: {clip(turn.get('chat', ''), 100)!r}; replying")
             # A granted reply is free: it doesn't spend a post.
             prompt = (
@@ -111,11 +130,16 @@ async def _discuss(session: ClientSession, llm, config: BotConfig,
             if llm.broke:
                 return None
             chat = reply[:280] or "I disagree."
+            replies[key] = chat
             args: dict = {"turn_id": turn_id, "chat": chat}
             if turn.get("reply_to") is not None:
                 args["reply_to"] = turn["reply_to"]
-            if _queued(await _call(session, "post", args)):
+            out = await _call(session, "post", args)
+            stopped = _code(out) in _STOP_CODES
+            if _queued(out):
                 queued_until = asyncio.get_event_loop().time() + QUEUED_BACKOFF_S
+            else:
+                answered.add(key)
         elif owe == "hot_seat":
             say(f"  hot seat, 5s to answer: {clip(turn.get('prompt', ''), 100)!r}")
             # 5s speed test: a handful of tokens, a tight timeout.
@@ -129,7 +153,9 @@ async def _discuss(session: ClientSession, llm, config: BotConfig,
             if llm.broke:
                 return None
             chat = reply[:280] or "No comment."
-            if _queued(await _call(session, "post", {"turn_id": turn_id, "chat": chat})):
+            out = await _call(session, "post", {"turn_id": turn_id, "chat": chat})
+            stopped = _code(out) in _STOP_CODES
+            if _queued(out):
                 queued_until = asyncio.get_event_loop().time() + QUEUED_BACKOFF_S
         elif owe == "wait":
             pass
@@ -163,6 +189,7 @@ async def _discuss(session: ClientSession, llm, config: BotConfig,
                     chat = reply
                 post_args["chat"] = chat[:280] or "No comment."
                 out = await _call(session, "post", post_args)
+                stopped = _code(out) in _STOP_CODES
                 if isinstance(out, dict) and not out.get("error"):
                     opened = True
                 elif _queued(out):
@@ -178,7 +205,8 @@ async def _discuss(session: ClientSession, llm, config: BotConfig,
         if isinstance(turn.get("cursor"), int):
             news_cursor = turn["cursor"]
         if turn.get("status") == "news":
-            await _on_news(session, llm, config, turn)
+            if not stopped:
+                await _on_news(session, llm, config, turn)
             continue
         if turn.get("phase") not in (None, "day_discussion"):
             return turn
@@ -349,8 +377,8 @@ async def play(server: str, token: str, config: BotConfig, pending: dict | None 
                         )
                     else:
                         continue
-                    if isinstance(out, str) and out in _STOP_CODES:
-                        say(f"  {obligation} rejected: {out}")
+                    if _code(out) in _STOP_CODES:
+                        say(f"  {obligation} rejected: {_code(out)}")
 
 
 def _say_role(seat: int, team: str, role: str, partners: list[int]) -> None:

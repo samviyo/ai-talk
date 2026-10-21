@@ -66,7 +66,8 @@ make eval             # your scorers over every (game, scored seat) task
 make check            # offline: your puzzle + spoof datasets through decide()
 ```
 
-1. `make practice N=3` (needs `BIFROST_API_KEY`; see `evals/practice.py`). A real
+1. `make practice N=3` (needs `BIFROST_API_KEY`; see `evals/practice.py`). Each run picks a new seed and
+   prints it; `make practice N=3 SEED=<n>` replays the same games to compare a bot change. A real
    `make check` also needs it: the offline run calls Bifrost directly with your own
    `BIFROST_API_KEY`/`BIFROST_BASE_URL` (`bot/puzzle_decide.py`) and spends it. It's the
    one place your bot calls Bifrost directly; in a game it only holds its seat token, and
