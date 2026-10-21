@@ -377,14 +377,14 @@ class Dispatcher:
         g = table.game
         if table.awaiting_start and not table._game_started:
             # lobby placeholder: the role card is dealt only once the game starts
-            return {"seat": seat, "role": None, "partners": [], "lobby": True}
+            return {"seat": seat, "team": table.seats[seat].team, "role": None, "partners": [], "lobby": True}
         role = g.role(seat)
         partners: list[int] = []
         if role == "werewolf":
             partners = [
                 s for s in range(g.config.seats) if s != seat and g.role(s) == "werewolf"
             ]
-        return {"seat": seat, "role": role, "partners": partners}
+        return {"seat": seat, "team": table.seats[seat].team, "role": role, "partners": partners}
 
     def _tool_get_my_role(self, table: Table, seat: int, args: dict) -> dict:
         return self._role(table, seat)

@@ -20,6 +20,9 @@ export WW_TOKEN=<your seat token>        # from `ww tokens`
 uv run bot                               # or: make bot
 ```
 
+The bot logs each turn to the terminal: what it owes, each model call (latency, tokens, the reply) and
+each action with the server's answer. If the connection drops it reconnects by itself.
+
 Model choice lives in `bot/config.toml` (`read_board_model`, `decide_model`).
 Only models in the server's `prices.toml` are accepted; `max_tokens` is required.
 

@@ -23,10 +23,12 @@ from werewolf.engine import Config
 
 from .app import create_app
 from .state import AppState
+from .table import DRAIN_S
 
 READY_BUDGET_S = 90.0
 WINDOW_S = 30.0
 FLOOR_S = 2.5  # 12 seats in a 40s discussion need posts airing faster than the 4s default
+MAX_POSTS = 2
 ENV_ALLOWLIST = ("WW_SERVER", "WW_TOKEN", "PATH", "HOME")
 INSTALL_ENV_ALLOWLIST = ("PATH", "HOME", "UV_CACHE_DIR", "UV_PYTHON", "UV_INDEX_URL")
 
@@ -40,6 +42,19 @@ class TeamEntry:
     @property
     def laptop(self) -> bool:
         return not self.repo
+
+
+def final_config(seats: int, seed: int) -> tuple[Config, float]:
+    """Config and floor_s for a finale table; past 12 seats, days stretch so every post airs."""
+    extra = max(0, seats - 12)
+    discussion_s = 40.0 + 2.5 * extra
+    floor_s = min(FLOOR_S, (discussion_s + DRAIN_S) / (seats * MAX_POSTS))
+    config = Config(
+        seats=seats, wolves=max(3, seats // 4),
+        # Two posts each keeps nominations from queueing past the close; a fourth wolf needs a seventh day.
+        max_days=6 if seats <= 12 else 7, seed=seed, discussion_s=discussion_s, max_posts=MAX_POSTS,
+    )
+    return config, floor_s
 
 
 def load_final(path: Path) -> tuple[int, int, list[TeamEntry]]:
@@ -135,6 +150,8 @@ async def run_final(
     seats_n, seed, teams = load_final(toml_path)
     if not teams:
         raise SystemExit("final.toml has no [[teams]]")
+    if len(teams) > seats_n:
+        raise SystemExit(f"final.toml has {len(teams)} teams but seats = {seats_n}; raise seats")
     bots_dir = runs_dir / "final" / "bots"
     bots_dir.mkdir(parents=True, exist_ok=True)
     checkouts: dict[str, Path] = {}
@@ -166,11 +183,7 @@ async def run_final(
         raise SystemExit(f"teams.toml has no usable key env var for: {names}")
 
     state = None
-    config = Config(
-        seats=seats_n, wolves=max(3, seats_n // 4),
-        # Two posts each keeps nominations from queueing past the close; six days run ~10 minutes.
-        max_days=6, seed=seed, discussion_s=40.0, max_posts=2,
-    )
+    config, floor_s = final_config(seats_n, seed)
     tokens = [secrets.token_urlsafe(12) for _ in range(seats_n)]
     rng = random.Random(seed)
     # One seat per team; baseline house bots fill the rest.
@@ -194,7 +207,7 @@ async def run_final(
         config=config, n_tables=1, budget_usd=budget_usd, window_s=WINDOW_S,
         runs_dir=runs_dir, prices=prices, fake_llm=fake_llm,
         base_url=os.environ.get("BIFROST_BASE_URL"), teams_toml=teams_toml,
-        auto_restart=False, floor_s=FLOOR_S,
+        auto_restart=False, floor_s=floor_s,
         min_window_s=min_window_s, transition_s=transition_s,
         house_prices=house_prices or None, powerup_prices=powerup_prices or None,
         reveal_s=reveal_s, beat_s=beat_s, manual_start=manual_start,

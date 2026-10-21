@@ -45,11 +45,13 @@ main{position:relative;display:flex;align-items:center;justify-content:center}
 .seat{position:absolute;width:150px;transform:translate(-50%,-50%);padding:10px 10px 10px;border-radius:16px;background:var(--panel);
  text-align:center;display:flex;flex-direction:column;align-items:center;gap:4px;box-shadow:0 0 0 1px var(--ring);transition:opacity .6s,box-shadow .3s,transform .4s}
 .seat .av{width:48px;height:48px;border-radius:50%;display:flex;align-items:center;justify-content:center;font:900 30px/1 var(--disp);color:var(--bg)}
-.seat .team{font-weight:600;font-size:21px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:130px}
+.seat .team{font-weight:600;font-size:21px;line-height:1.1;max-width:130px;overflow:hidden;overflow-wrap:anywhere;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical}
 .seat .role{font:800 21px/1 var(--disp);letter-spacing:.12em;text-transform:uppercase}
 .seat .bar{width:100%;height:6px;border-radius:3px;background:var(--line);overflow:hidden}.seat .bar i{display:block;height:100%;background:var(--villager);transition:width .6s}
 .seat .usd{font:19px/1 var(--mono);color:var(--dim)}
 .seat .badge{font:800 19px/1 var(--disp);letter-spacing:.1em;text-transform:uppercase;padding:4px 10px;border-radius:999px;color:var(--bg)}
+.dense .seat{width:128px;padding:6px;gap:2px}.dense .seat .av{width:38px;height:38px;font-size:24px}
+.dense .seat .team{font-size:18px;max-width:116px}.dense .seat .role{font-size:17px}.dense .seat .usd{font-size:16px}
 .seat.wolf{box-shadow:0 0 0 2px var(--wolf)}
 .seat.pending{box-shadow:0 0 0 3px var(--gold)}
 .seat.thinking{animation:pulse 1.1s infinite}
@@ -186,7 +188,7 @@ section h2{margin:0 0 12px;font:800 28px/1 var(--disp);letter-spacing:.14em;text
 #lobby .ls.ready{box-shadow:0 0 0 1px #2A3352;opacity:1}
 #lobby .ls .av{width:48px;height:48px;border-radius:50%;flex:none;display:flex;align-items:center;justify-content:center;font:900 28px/1 var(--disp);background:#3A4256;color:#070A18}
 #lobby .ls.ready .av{background:#9DB4FF}
-#lobby .ls b{display:block;font-size:20px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}#lobby .ls span{font:15px var(--mono);color:var(--gold)}#lobby .ls.ready span{color:var(--seer)}
+#lobby .ls b{display:block;font-size:20px;line-height:1.15;overflow-wrap:anywhere}#lobby .ls span{font:15px var(--mono);color:var(--gold)}#lobby .ls.ready span{color:var(--seer)}
 #lobby .ls>div:last-child{min-width:0}
 #lobby .n{font:28px var(--mono);color:var(--dim)}#lobby .n b{color:var(--fg)}
 #result{background:#140A0D;display:grid;grid-template-columns:1fr 760px}
@@ -265,7 +267,8 @@ function name(s){return 'Seat '+s+' · '+team(s)}
 function tint(s){const d=meta[s]||{};return TINT[d.role]||'var(--dim)'}
 function layout(n){
   N=n;$('ringwrap').querySelectorAll('.seat').forEach(e=>e.remove());els={};pos={};
-  for(let s=0;s<n;s++){const a=2*Math.PI*s/n-Math.PI/2,x=50+42*Math.cos(a),y=50+40*Math.sin(a);pos[s]=[x,y];
+  const dense=n>12;$('ringwrap').classList.toggle('dense',dense);const rx=dense?44:42,ry=dense?43:40;
+  for(let s=0;s<n;s++){const a=2*Math.PI*s/n-Math.PI/2,x=50+rx*Math.cos(a),y=50+ry*Math.sin(a);pos[s]=[x,y];
     const el=document.createElement('div');el.className='seat';el.style.left=x+'%';el.style.top=y+'%';$('ringwrap').appendChild(el);els[s]=el}
 }
 function render(s){

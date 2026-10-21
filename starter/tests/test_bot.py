@@ -30,3 +30,41 @@ def test_wolves_never_nominate_partners() -> None:
 
     alive = [0, 1, 2, 3]
     assert parse_opener('{"chat": "x", "nominate": 2}', alive, 0, partners=[2]) == ("x", None, None)
+
+
+def _run_once_raising(monkeypatch, exc: BaseException) -> bool:
+    import bot.__main__ as main
+
+    async def fake_play(*args) -> None:
+        raise exc
+
+    monkeypatch.setattr(main, "play", fake_play)
+    return main._play_once("http://x", "tok", None, {})
+
+
+def test_dropped_connections_reconnect_and_other_errors_raise(monkeypatch) -> None:
+    import httpx
+    import pytest
+    from mcp.shared.exceptions import MCPError
+    from mcp_types import CONNECTION_CLOSED, INTERNAL_ERROR
+
+    closed = MCPError(code=CONNECTION_CLOSED, message="SSE stream ended without a response")
+    # anyio task groups nest the real error, so the bot must look inside groups.
+    assert _run_once_raising(monkeypatch, ExceptionGroup("tg", [ExceptionGroup("inner", [closed])])) is False
+    assert _run_once_raising(monkeypatch, httpx.ReadTimeout("slow")) is False
+    with pytest.raises(BaseExceptionGroup):
+        _run_once_raising(monkeypatch, MCPError(code=INTERNAL_ERROR, message="bug"))
+    with pytest.raises(BaseExceptionGroup):
+        _run_once_raising(monkeypatch, ExceptionGroup("tg", [closed, ValueError("bug")]))
+
+
+def test_resume_replays_an_open_turn_only() -> None:
+    import time
+
+    from bot.__main__ import _resume
+
+    turn = {"turn_id": "t1", "phase": "day_vote", "day": 2, "deadline_s": 20}
+    resumed = _resume({"turn": turn, "until": time.monotonic() + 8})
+    assert resumed["turn_id"] == "t1" and 7 < resumed["deadline_s"] <= 8
+    assert _resume({"turn": turn, "until": time.monotonic() + 0.5}) is None
+    assert _resume({}) is None

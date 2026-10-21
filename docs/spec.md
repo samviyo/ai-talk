@@ -37,7 +37,7 @@ rejects `seats < 2 * wolves + 3`. Roles are assigned by a shuffle from `seed`.
 | Format | Seats | Wolves | Discussion | Max days |
 |---|---|---|---|---|
 | practice | 7 | 2 | 60s live chat, 3 posts each | 5 |
-| final | 10–12 | 3 | 40s live chat, 2 posts each | 6 |
+| final | 10–16 | `seats // 4`, min 3 | 40s live chat (+2.5s per seat past 12), 2 posts each | 6 (7 past 12 seats) |
 
 ## Engine contract (`werewolf/engine`)
 
@@ -240,7 +240,7 @@ and phase advance per table under one lock.
 | Tool | Returns |
 |---|---|
 | `wait_for_turn(timeout_s=25, since?)` | Server caps the wait at 3.5s (httpx's default 5s read timeout). Each (seat, window) is served once in night and vote; a re-poll blocks until the next window. In discussion a seat may be served again on new board activity, a mention, a reply or the hot seat. Returns `{turn_id, phase, day, round, you_owe, legal_targets, announcements, deadline_s}`, or `{status:"waiting"}` on timeout, or `{status:"over", result}`. With `since`, returns `{status:"news", events, cursor}` early when a public event lands after the cursor. Between games (auto-restart on) it returns `{status:"idle", result}` after each seat has heard `over` once; the next game opens frozen until every seat calls `get_my_role`. Wakes immediately when a window opens for this seat. The only moderator channel |
-| `get_my_role()` | `{seat, role, partners}`. `partners` is empty unless werewolf |
+| `get_my_role()` | `{seat, team, role, partners}`. `partners` is empty unless werewolf |
 | `read_board(since=0)` | `{posts:[{id, seat, day, chat, claimed_role, accuse, reply_to, reactions}], next, discussion_ends_in_s}`. Posts are visible once the floor releases them |
 | `post(turn_id, chat, claimed_role?, accuse?, reply_to?, nominate?, second?, reason?)` | Discussion: `{ok, queued}` (queue position); a defence window: `{ok, posts_left}`. `still_queued` while the seat holds an unreleased post, `no_posts_left` past `max_posts` |
 | `react(post_id, kind)` | `{ok}`; `kind` in `agree|doubt|suspect`, public immediately, once per seat per post, 8 per seat per day, never on your own post |
@@ -452,8 +452,8 @@ cmd = "uv run bot"                     # run inside the checkout
 - No submission. A team without `repo` is a **laptop seat**: the team runs `uv run bot` on its own
   laptop with the `WW_SERVER` and `WW_TOKEN` the finale prints and writes to
   `runs/final/laptop_seats.json`. Serve with `--host 0.0.0.0` so laptops can reach it.
-- Each team gets exactly one seat; baseline house bots fill the rest. Seats are
-  shuffled with the seed.
+- Each team gets exactly one seat; baseline house bots fill the rest, and more teams than
+  `seats` is refused. Seats are shuffled with the seed.
 - Bots never hold a key: every seat calls the server's LLM proxy with its token, and the
   proxy charges that team's Bifrost key.
 - Repo seats only: each bot gets only `WW_SERVER`, `WW_TOKEN`, `PATH` and `HOME`. No other env is

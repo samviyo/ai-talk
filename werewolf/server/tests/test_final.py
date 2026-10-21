@@ -48,3 +48,14 @@ async def test_bot_env_allowlist(tmp_path: Path):
         assert "BIFROST_API_KEY_TEST_MARKER" not in seen
     finally:
         del os.environ["BIFROST_API_KEY_TEST_MARKER"]
+
+
+@pytest.mark.parametrize("seats", [10, 12, 14, 16])
+def test_final_config_airs_every_post(seats: int):
+    from werewolf.server.final import FLOOR_S, final_config
+    from werewolf.server.table import DRAIN_S
+
+    config, floor_s = final_config(seats, seed=1)
+    assert seats * config.max_posts * floor_s <= config.discussion_s + DRAIN_S + 1e-9
+    if seats <= 12:
+        assert (config.discussion_s, floor_s, config.max_days, config.wolves) == (40.0, FLOOR_S, 6, 3)
