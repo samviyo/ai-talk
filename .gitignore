@@ -8,6 +8,8 @@ runs/
 .serena/
 .playwright-mcp/
 alibi/datasets/heldout.jsonl
+# Made per laptop by make golden.
+alibi/golden/
 teams.toml
 .tools/
 alibi/zig/zig-out/

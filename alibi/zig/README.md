@@ -24,7 +24,8 @@ agents cannot edit it, the Python tool, or the scorers in `alibi/zig/scorers/`.
 ## The port
 
 Four files in `alibi/zig/src/`. Each prints one JSON object, so each piece can be checked on
-its own:
+its own, as long as all four compile: they build one binary, so one broken file turns every check
+red. Keep your file compiling (leave the stub until your code builds).
 
 | File | Command | Check | Ports |
 |---|---|---|---|
@@ -61,7 +62,7 @@ Parity compares numbers to within 1e-9, ignores key order, and ignores the order
 
 ```sh
 make zig-build                                  # build alibi/zig/zig-out/bin/alibi-check
-make parity                                     # end to end against every golden case
+make parity                                     # end to end against both golden cases (48 rows)
 make parity-parse | parity-score | parity-report
 ALIBI_HELDOUT_SEED=<seed> make reveal-parity    # fresh inputs, Python vs Zig
 ```

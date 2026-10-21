@@ -84,8 +84,8 @@ REDIRECT = re.compile(r"\d*&?>>?\|?\s*([^\s;&|<>]+)")
 
 
 def blocked():
-    print("alibi evals are locked (make unlock-alibi to unlock): "
-          "teams write the scorers, datasets and gates, not agents.", file=sys.stderr)
+    print("locked: the scorers, datasets, gates and golden outputs belong to the team, "
+          "not agents. Only a human unlocks.", file=sys.stderr)
     sys.exit(2)
 
 

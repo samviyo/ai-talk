@@ -240,7 +240,7 @@ def main(argv: list[str] | None = None) -> int:
         return parity(binary, Path(args.golden), [args.stage])
     seed = args.seed if args.seed is not None else os.environ.get("ALIBI_HELDOUT_SEED")
     if seed is None or not str(seed).lstrip("-").isdigit():
-        print("set ALIBI_HELDOUT_SEED: the organiser announces it at the reveal")
+        print("ALIBI_HELDOUT_SEED must be a whole number: the organiser announces it at the reveal")
         return 1
     return reveal(binary, int(seed), team_evals_dir(args.team_evals_dir))
 
