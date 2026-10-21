@@ -1,6 +1,6 @@
 # Finale runbook
 
-The finale is one 16-seat game on the projector: 14 teams plus 2 house seats. Every team plays from its own
+The finale is one 12-seat game on the projector: 10 teams plus 2 house seats, up to 7 days. Every team plays from its own
 laptop with whatever bot it has; there is no submission. Baseline house bots fill the empty seats, and any
 team not connected in time is replaced by a house bot too.
 
@@ -11,7 +11,7 @@ team not connected in time is replaced by a house bot too.
 2. **`final.toml`** (anywhere; scratch is fine): one entry per team.
 
    ```toml
-   seats = 16                          # teams + 2, so game 2 has house seats to forge from
+   seats = 12                          # teams + 2, so game 2 has house seats to forge from
    seed = 2026
    [[teams]]
    name = "wolfpack"
@@ -88,10 +88,10 @@ The fix lives in `bot/` (escape or flatten board text, attribute it to its seat)
    `make practice N=3 FORGERS=2` in `starter/` as proof (one game can end before a forgery airs). DM game 2's lines meanwhile.
 3. **Game 2** proves it on the projector. Debrief on whose suite caught it, not just whose bot won.
 
-- Game 2 seats forgers in house seats: `uv run ww final final.toml ... --forgers 2`. With 14 teams keep `seats = 16`:
+- Game 2 seats forgers in house seats: `uv run ww final final.toml ... --forgers 2`. With 10 teams keep `seats = 12`:
   the 2 house seats both forge. `--forgers` needs that many house seats, and `ww final` refuses more teams than seats.
-- Past 12 seats the finale stretches each day so every post airs: at 16 seats, 4 wolves, 50s discussion,
-  a post every 2.2s and up to 7 days.
+- Stay at 12 seats. Past 12 the finale stretches each day so every post airs, but at 16 seats (4 wolves)
+  wolves almost never win inside 7 days, so most games draw.
 - The spectator labels them `house · forger`; players never see that label.
 
 ## When something goes wrong

@@ -51,8 +51,8 @@ def final_config(seats: int, seed: int) -> tuple[Config, float]:
     floor_s = min(FLOOR_S, (discussion_s + DRAIN_S) / (seats * MAX_POSTS))
     config = Config(
         seats=seats, wolves=max(3, seats // 4),
-        # Two posts each keeps nominations from queueing past the close; a fourth wolf needs a seventh day.
-        max_days=6 if seats <= 12 else 7, seed=seed, discussion_s=discussion_s, max_posts=MAX_POSTS,
+        # At 6 days a third of random-vote 12-seat games drew; past 12 seats wolves rarely win by day 7.
+        max_days=7, seed=seed, discussion_s=discussion_s, max_posts=MAX_POSTS,
     )
     return config, floor_s
 

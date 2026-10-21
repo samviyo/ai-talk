@@ -37,7 +37,7 @@ rejects `seats < 2 * wolves + 3`. Roles are assigned by a shuffle from `seed`.
 | Format | Seats | Wolves | Discussion | Max days |
 |---|---|---|---|---|
 | practice | 7 | 2 | 60s live chat, 3 posts each | 5 |
-| final | 10–16 | `seats // 4`, min 3 | 40s live chat (+2.5s per seat past 12), 2 posts each | 6 (7 past 12 seats) |
+| final | 10–16 | `seats // 4`, min 3 | 40s live chat (+2.5s per seat past 12), 2 posts each | 7 |
 
 ## Engine contract (`werewolf/engine`)
 

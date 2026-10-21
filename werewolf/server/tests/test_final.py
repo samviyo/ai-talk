@@ -58,4 +58,4 @@ def test_final_config_airs_every_post(seats: int):
     config, floor_s = final_config(seats, seed=1)
     assert seats * config.max_posts * floor_s <= config.discussion_s + DRAIN_S + 1e-9
     if seats <= 12:
-        assert (config.discussion_s, floor_s, config.max_days, config.wolves) == (40.0, FLOOR_S, 6, 3)
+        assert (config.discussion_s, floor_s, config.max_days, config.wolves) == (40.0, FLOOR_S, 7, 3)
