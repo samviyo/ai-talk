@@ -1,4 +1,14 @@
 {
+  "permissions": {
+    "deny": [
+      "Bash(make golden*)",
+      "Bash(make unlock-alibi*)",
+      "Bash(git push *)"
+    ],
+    "allow": [
+      "Bash(make parity*)"
+    ]
+  },
   "hooks": {
     "PreToolUse": [
       {

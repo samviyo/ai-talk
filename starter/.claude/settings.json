@@ -1,4 +1,16 @@
 {
+  "permissions": {
+    "deny": [
+      "Bash(make unlock)",
+      "Bash(git push *)"
+    ],
+    "allow": [
+      "Bash(make check *)",
+      "Bash(make practice *)",
+      "Bash(make eval *)",
+      "Bash(make test)"
+    ]
+  },
   "hooks": {
     "PreToolUse": [
       {
