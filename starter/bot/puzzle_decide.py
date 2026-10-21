@@ -13,7 +13,8 @@ from .agent import _SYSTEM, load_config, strip_artifacts
 
 _config = load_config()
 _client = OpenAI(
-    base_url=os.environ.get("BIFROST_BASE_URL", "").rstrip("/") + "/v1",
+    # Same default as scripts/bifrost-env.sh, for a key exported without its URL.
+    base_url=os.environ.get("BIFROST_BASE_URL", "https://bifrost.services.clovesoftware-dev.com").rstrip("/") + "/v1",
     api_key=os.environ.get("BIFROST_API_KEY", ""),
     default_headers={"x-bf-vk": os.environ.get("BIFROST_API_KEY", "")},  # Bifrost dev ignores Bearer and only checks this header
     max_retries=0,

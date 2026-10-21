@@ -9,7 +9,7 @@ You're helping a team build an LLM Werewolf bot. `README.md` covers setup, the M
   (only models in the server's `prices.toml`; `max_tokens` is required).
 - `evals/` — the harness (`harness.py`, `offline.py`, `practice.py`) plus the team's suite:
   game scorers in `evals/scorers/*.py`, offline scorers in `evals/scorers/offline/*.py`, gates in
-  `evals/gates.toml`, datasets in `evals/datasets/*.jsonl`. No team scorers ship (the one
+  `evals/gates.toml`, datasets in `evals/datasets/puzzles.jsonl` and `spoofs.jsonl` (other names are ignored). No team scorers ship (the one
   helper, `seats_match`, is built in); the team writes every real scorer.
 - `tests/` — harness tests and fixture transcripts, including the negative control in `tests/fixtures/runs/negctl/`.
 
@@ -17,7 +17,7 @@ You're helping a team build an LLM Werewolf bot. `README.md` covers setup, the M
 
 ```sh
 make check            # offline: datasets through decide(); TRIALS=3 for pass rate and pass^k
-make practice N=3     # real games vs house bots into runs/practice/ (needs the practice server)
+make practice N=3     # real games vs house bots into runs/practice/ (starts its own server; spends the team key)
 make eval             # scorers over every (game, seat) task; any red gate exits 1
 make test             # harness tests
 ```
