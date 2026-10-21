@@ -120,7 +120,7 @@ async def _discuss(session: ClientSession, llm, config: BotConfig,
             say(f"  seat {turn.get('from')} accused us: {clip(turn.get('chat', ''), 100)!r}; replying")
             # A granted reply is free: it doesn't spend a post.
             prompt = (
-                f"Seat {turn.get('from')} accused you: {turn.get('chat', '')!r}\n"
+                f"You are seat {seat}. Seat {turn.get('from')} accused you: {turn.get('chat', '')!r}\n"
                 "Reply in one short line (<=280 chars), nothing else."
             )
             reply = llm.complete(
@@ -144,7 +144,7 @@ async def _discuss(session: ClientSession, llm, config: BotConfig,
             say(f"  hot seat, 5s to answer: {clip(turn.get('prompt', ''), 100)!r}")
             # 5s speed test: a handful of tokens, a tight timeout.
             prompt = (
-                f"Hot seat, answer fast, one short line: {turn.get('prompt', '')}"
+                f"You are seat {seat}. Hot seat, answer fast, one short line: {turn.get('prompt', '')}"
             )
             reply = llm.complete(
                 config.decide_model, prompt, timeout_s=4.0,

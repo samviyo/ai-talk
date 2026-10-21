@@ -6,7 +6,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash .claude/hooks/protect-evals.sh"
+            "command": "bash \"$CLAUDE_PROJECT_DIR\"/.claude/hooks/protect-evals.sh"
           }
         ]
       }

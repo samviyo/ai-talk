@@ -6,11 +6,11 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash .claude/hooks/protect-team-evals.sh"
+            "command": "bash \"$CLAUDE_PROJECT_DIR\"/.claude/hooks/protect-team-evals.sh"
           },
           {
             "type": "command",
-            "command": "bash .claude/hooks/protect-alibi-evals.sh"
+            "command": "bash \"$CLAUDE_PROJECT_DIR\"/.claude/hooks/protect-alibi-evals.sh"
           }
         ]
       }
